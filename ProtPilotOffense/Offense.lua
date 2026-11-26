@@ -1,4 +1,4 @@
--- Tank Pilot 0.6.4. All recommendations require a manual player action.
+-- Tank Pilot 0.6.5. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -435,9 +435,6 @@ local function rotation(model)
             result=choose("judgement","Recover threat with Fury") or choose("swiftJudgement","Recover threat with Swift Judgement")
             if result then result.recoversThreat=true;return result end
         end
-        -- Fury Judgement is an intentional taunt while this tank profile is enabled.
-        result=choose("holyShield","Block mitigation",true)
-        if result then return result end
         local consecration=spells.consecration
         local maximum=number(read(UnitPowerMax,"player"))
         local consecrationCost=consecration and cost(consecration)
@@ -451,6 +448,12 @@ local function rotation(model)
         end
         if manaAllows and settings.aoe then
             result=choose("consecration","Damage and area threat",true)
+            if result then return result end
+        end
+        result=choose("holyShield","Block mitigation",true)
+        if result then return result end
+        if manaAllows and not settings.aoe then
+            result=choose("consecration","Start ground damage while mana allows",true)
             if result then return result end
         end
         if sealActive then
@@ -476,10 +479,6 @@ local function rotation(model)
         end
         result=choose("holyStrike","Holy damage and threat")
         if result then return result end
-        if manaAllows then
-            result=choose("consecration","Damage with mana reserve",true)
-            if result then return result end
-        end
         
     elseif class=="DRUID" then
         if settings.aoe then
@@ -531,6 +530,7 @@ local function advance(model, action)
         model.sunder=math.min(5,(model.sunder or current or 0)+1)
     end
     local cd=expectedCooldown(spell) or 0
+    if cd<=0 and (family=="consecration" or family=="holyShield") then cd=baseCooldowns[family] end
     if family=="exorcism" and cd<=0 then cd=15 end
     if family=="swiftJudgement" and cd<=0 then cd=60 end
     model.cooldowns[spell.id]=model.time+cd
@@ -1006,7 +1006,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Experimental="..tostring(settings.experimental).." potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.6.4 | "..(class or "unknown").." | "..lastReason)
+        say("0.6.5 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do

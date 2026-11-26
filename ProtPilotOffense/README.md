@@ -1,3 +1,7 @@
+# Tank Pilot 0.6.5
+
+Protection Paladin prioritizes affordable Consecration on single targets and packs. Routine Holy Shield comes first on single targets. On packs, Consecration comes first. Urgent survival and Fury threat recovery retain priority. The mana reserve applies when resource information is readable.
+
 # Tank Pilot 0.6.1
 
 Swift Judgement has its own cooldown. In a group with Fury active, the tank profile holds it for threat recovery when ordinary Judgement is unavailable. Solo or with a damage seal it can follow normal Judgement with offensive cooldowns enabled. See TANK-ABILITIES.md for the per-ability review. Use /ppoff audit for a copyable list from your character’s learned spellbook.

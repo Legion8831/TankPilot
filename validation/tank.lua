@@ -479,11 +479,13 @@ assert(textures[1].texture==20154 and textures[2].texture==20271,'Ret seal into 
 assert(textures[1].texture~=25780 and textures[1].texture~=1311649)
 -- Automatic AoE actually changes the tank priority, then returns to single.
 ProtPilotCharacterDB={profile='protection'};power=100
-fresh('PALADIN',{679,26573})
+fresh('PALADIN',{679,26573,20925})
 cmd('auto');npCount=3;clock=clock+1;tick()
 assert(textures[1].texture==26573 and ProtPilotOffenseDB.aoe)
 npCount=1;clock=clock+2;tick()
-assert(textures[1].texture==679 and not ProtPilotOffenseDB.aoe)
+assert(textures[1].texture==20925 and textures[2].texture==26573 and not ProtPilotOffenseDB.aoe)
+cd[20925]=true;tick()
+assert(textures[1].texture==26573 and textures[2].texture==679,'single-target ground damage before filler')
 -- Unknown proc stacks cannot become a positive recommendation.
 local ctx={byID={},targets=1,aura=function() return nil end}
 assert(ProtPilotProfiles.Gate({t='stack',id=400625,op='>=',n=3},ctx,{time=0})==nil)
