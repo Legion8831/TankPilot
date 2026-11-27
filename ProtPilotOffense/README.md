@@ -1,3 +1,7 @@
+# Rotation Pilot 0.8.1
+
+Track successful seal replacements across ranks and report incoming DBM timer starts with their labels, durations and spell IDs when readable.
+
 # Rotation Pilot 0.8.0
 
 Install the included `ProtPilotOffense` directory over the existing addon. Open `/rpilot` for options or use the existing `/ppoff` alias. The saved-variable names are unchanged.

@@ -1,4 +1,4 @@
--- Rotation Pilot 0.8.0. All recommendations require a manual player action.
+-- Rotation Pilot 0.8.1. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -82,7 +82,11 @@ local function init()
     if type(settings.bossSpells)~="table" then settings.bossSpells={} end
     if type(ProtPilotOffenseBleedImmune)~="table" then ProtPilotOffenseBleedImmune={} end
 end
+local sealFamilies={fury=true,righteousness=true,crusader=true,justice=true,spell20375=true,spell20165=true,spell20166=true}
+local sealRanks={}
+local lastSeal,sealCastAt,sealConfirmed
 local function scan()
+    sealRanks={}
     spells = {}
     bookEntries={}
     local _, token = read(UnitClass, "player")
@@ -101,6 +105,7 @@ local function scan()
     for family, ids in pairs(profile.families) do
         for rank, id in ipairs(ids) do
             direct[id] = family
+            if class=="PALADIN" and sealFamilies[family] then sealRanks[id]=family end
             if #ids > 1 then rankOrder[id] = rank end
             local name = read(C_Spell.GetSpellName, id)
             if not name then
@@ -126,6 +131,7 @@ local function scan()
                     if read(book.IsSpellInSpellBook,id,bank,false)==true or read(IsPlayerSpell,id)==true then
                         bookEntries[id]=name or tostring(id)
                     end
+                    if class=="PALADIN" and sealFamilies[family] then sealRanks[id]=family end
                     if family then
                         -- When available, the book's known-spell check excludes unlearned entries.
                         local known = read(book.IsSpellInSpellBook, id, bank, false)
@@ -191,6 +197,16 @@ local function aura(spell, unit)
     if not spell then return nil end
     local present,expiration,stacks=readAura(spell,unit)
     if unit~="player" then return present,expiration,stacks end
+    if sealCastAt and sealFamilies[spell.family] and GetTime()<sealCastAt+30 then
+        if spell.family~=lastSeal then return false end
+        if present then sealConfirmed=true
+        elseif not sealConfirmed or present==nil then
+            return true,sealCastAt+30
+        else
+            sealCastAt=nil
+            effects[spell.family]=nil
+        end
+    end
     if present~=nil then
         playerAuraCache[spell.id]={present=present,expiration=expiration,stacks=stacks}
         return present,expiration,stacks
@@ -317,8 +333,7 @@ local function upkeep(family, unit, model)
         return entry(family,"Maintain "..spells[family].name)
     end
 end
-local sealFamilies={fury=true,righteousness=true,crusader=true,justice=true}
-local lastSeal, judgedUtility, fleeingUntil
+local judgedUtility, fleeingUntil
 local judgedTargets={}
 local function utilitySeal(model)
     if settings.seal~="auto" or model.judgedUtility then return end
@@ -668,12 +683,16 @@ end
 
 -- DBM countdown adapter. Production triggers require an explicit spell mapping.
 local timers, registered = {}, {}
+local timerStarts,lastTimer=0,"none"
 local function dbmCallback(event,id,...)
     id=plain(id)
     if type(id)~="string" and type(id)~="number" then return end
     if event=="DBM_TimerBegin" or event=="DBM_TimerStart" then
         local label,duration,_,kind,spellID=...
         label,duration,kind,spellID=plain(label),number(duration),plain(kind),plain(spellID)
+        timerStarts=timerStarts+1
+        lastTimer=string.format("%s | spell %s | duration %s",type(label)=="string" and label or "unknown",tostring(spellID or "unknown"),tostring(duration or "unknown"))
+        survival.Log("DBM timer",lastTimer)
         local demo=settings.demo and type(label)=="string" and label:match("^%s*Tank Buster%s*$")
         local mapped=(type(spellID)=="number" or type(spellID)=="string") and settings.bossSpells[tonumber(spellID)]
         if duration and duration>0 and (demo or mapped) then
@@ -1088,14 +1107,18 @@ local function recordCast(id)
     casts[id]=now
     if catalog then catalog.RecordCast(id) end
     playerAuraCache[id]=nil
+    local appliedSeal=sealRanks[id]
+    if appliedSeal then
+        lastSeal,sealCastAt,sealConfirmed=appliedSeal,now,false
+        for family in pairs(sealFamilies) do
+            effects[family]=nil
+            if spells[family] then playerAuraCache[spells[family].id]=nil end
+        end
+        effects[appliedSeal]=now
+    end
     for family,spell in pairs(spells) do
         if spell.id==id then
-            if sealFamilies[family] then
-                lastSeal=family
-                for other in pairs(sealFamilies) do
-                    if other~=family and spells[other] then effects[other]=nil;playerAuraCache[spells[other].id]=nil end
-                end
-            elseif family=="judgement" and (lastSeal=="justice" or lastSeal=="crusader") and effects[lastSeal] and now-effects[lastSeal]<30 then
+            if family=="judgement" and (lastSeal=="justice" or lastSeal=="crusader") and effects[lastSeal] and now-effects[lastSeal]<30 then
                 judgedUtility={family=lastSeal,cast=now,expires=now+(lastSeal=="justice" and 10 or 40)}
                 local guid=read(UnitGUID,"target")
                 if guid then judgedTargets[guid]=judgedUtility end
@@ -1116,6 +1139,10 @@ end
 for event in pairs(bindingEvents) do pcall(driver.RegisterEvent,driver,event) end
 driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID,...)
     if not settings then init() end
+    if event=="PLAYER_ENTERING_WORLD" or (event=="UNIT_AURA" and plain(unit)=="player" and read(UnitIsDeadOrGhost,"player")==true) then
+        lastSeal,sealCastAt,sealConfirmed=nil,nil,nil
+        for family in pairs(sealFamilies) do effects[family]=nil end
+    end
     if bindingEvents[event] then spellKeys=nil end
     if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then catalog.ClearTarget();judgedUtility=nil;fleeingUntil=nil end
     if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_ENTERING_WORLD" then judgedTargets={};judgedUtility=nil;fleeingUntil=nil end
@@ -1223,6 +1250,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
     elseif command=="report" or command:match("^why%s+") then
         local lines={"Profile "..tostring(profileKey).." | targets "..enemyCount.." | "..ProtPilotTargets.source,
             "Health "..tostring(survival.healthStatus).." | Movement "..tostring(survival.movementStatus).." | Dispel "..tostring(survival.dispelStatus)}
+        lines[#lines+1]="DBM loaded="..tostring(DBM~=nil).." | timer start callbacks this session="..timerStarts.." | latest="..lastTimer
         for i,label in ipairs({"Now","Next","Then"}) do
             local a=lastQueue[i]
             lines[#lines+1]=label.." = "..(a and (a.spell.name.." | "..a.reason.." | +"..string.format("%.1f",a.delay or 0).."s") or "empty")
@@ -1252,7 +1280,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.8.0 | "..(class or "unknown").." | "..lastReason)
+        say("0.8.1 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do

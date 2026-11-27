@@ -642,3 +642,19 @@ ActionButton5.action=17;event('ACTIONBAR_PAGE_CHANGED');assert(hotkeys[1].text==
 assert(SLASH_PROTPILOTOFFENSE1=="/rpilot" and SLASH_PROTPILOTOFFENSE2=="/ppoff")
 cmd("why 26573")
 cmd("report")
+
+-- A lower rank cast replaces the previous seal even if the aura query lags.
+ProtPilotCharacterDB={profile="protection"}
+auraMap={}
+fresh("PALADIN",{20154,20287,1311649,20271})
+cmd("seal righteousness")
+cast(1311649)
+assert(textures[1].texture==20287)
+cast(20154)
+assert(textures[1].texture==20271,"downranked replacement recognized despite missing aura")
+clock=clock+10;tick();assert(textures[1].texture==20271)
+cast(1311649)
+assert(textures[1].texture==20287,"switching away invalidates previous seal")
+cast(20287)
+assert(textures[1].texture==20271,"highest rank replacement recognized")
+clock=clock+31;tick();assert(textures[1].texture==20287,"expired seal returns to queue")
