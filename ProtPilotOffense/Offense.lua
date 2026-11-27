@@ -1,4 +1,4 @@
--- Tank Pilot 0.7.0. All recommendations require a manual player action.
+-- Tank Pilot 0.7.1. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -811,6 +811,46 @@ frame:SetScript("OnDragStop",function(self)
     local point,_,relativePoint,x,y=self:GetPoint()
     settings.position={point,relativePoint,x,y}
 end)
+local barButtons={"ActionButton","MultiBarBottomLeftButton","MultiBarBottomRightButton","MultiBarRightButton",
+    "MultiBarLeftButton","MultiBar5Button","MultiBar6Button","MultiBar7Button"}
+local bindingEvents={UPDATE_BINDINGS=true,ACTIONBAR_SLOT_CHANGED=true,ACTIONBAR_PAGE_CHANGED=true,
+    UPDATE_BONUS_ACTIONBAR=true,UPDATE_OVERRIDE_ACTIONBAR=true,UPDATE_VEHICLE_ACTIONBAR=true,
+    PLAYER_ENTERING_WORLD=true,UPDATE_SHAPESHIFT_FORM=true,UPDATE_MACROS=true,PLAYER_REGEN_ENABLED=true}
+local spellKeys,itemKeys
+local function bindingFor(spell)
+    if not spell then return "" end
+    if not spellKeys then
+        spellKeys,itemKeys={},{}
+        for bar,prefix in ipairs(barButtons) do
+            local command=bar==1 and "ACTIONBUTTON" or "MULTIACTIONBAR"..(bar-1).."BUTTON"
+            for index=1,12 do
+                local button=_G[prefix..index]
+                local slot=button and number(button.action)
+                local key=slot and read(GetBindingKey,command..index)
+                if type(key)=="string" and read(GetBindingAction,key,true)==command..index then
+                    local kind,id=read(GetActionInfo,slot)
+                    if kind=="macro" and type(id)=="number" then
+                        id=read(GetMacroSpell,id)
+                        kind="spell"
+                    end
+                    local keys=kind=="item" and itemKeys or kind=="spell" and spellKeys
+                    if keys and type(id)=="number" and not keys[id] then
+                        keys[id]=key:gsub("SHIFT%-","S-"):gsub("CTRL%-","C-"):gsub("ALT%-","A-"):gsub("BUTTON","M")
+                    end
+                end
+            end
+        end
+    end
+    return (spell.item and itemKeys or spellKeys)[spell.id] or ""
+end
+local function keyOverlay(holder)
+    local text=holder:CreateFontString(nil,"OVERLAY","NumberFontNormal")
+    text:SetPoint("TOPRIGHT",holder,"TOPRIGHT",-2,-2)
+    text:SetTextColor(1,1,1)
+    text:SetShadowColor(0,0,0,1)
+    text:SetShadowOffset(1,-1)
+    return text
+end
 local slots={}
 for i=1,3 do
     local holder=CreateFrame("Frame",nil,frame)
@@ -824,13 +864,14 @@ for i=1,3 do
     label:SetWidth(90)
     label:SetHeight(44)
     label:SetJustifyV("TOP")
-    slots[i]={holder=holder,icon=icon,label=label}
+    slots[i]={holder=holder,icon=icon,label=label,key=keyOverlay(holder)}
 end
 local emergency=CreateFrame("Frame",nil,frame)
 emergency:SetAllPoints(slots[1].holder)
 local emergencyIcon=emergency:CreateTexture(nil,"OVERLAY")
 emergencyIcon:SetAllPoints(emergency)
 emergencyIcon:SetTexCoord(.08,.92,.08,.92)
+local emergencyKey=keyOverlay(emergency)
 local emergencyLabel=emergency:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
 emergencyLabel:SetPoint("TOP",emergency,"BOTTOM",0,-4)
 emergencyLabel:SetWidth(90)
@@ -875,6 +916,7 @@ local function paintEmergency(action,threshold)
     local low,normal=curves(threshold)
     local lowColor=UnitHealthPercent("player",true,low)
     local normalColor=UnitHealthPercent("player",true,normal)
+    emergencyKey:SetText(bindingFor(action.spell))
     emergencyIcon:SetTexture(action.spell.icon)
     emergencyLabel:SetText(action.spell.name..(action.family=="layHands" and " (self)" or ""))
     emergency:SetAlpha(select(4,lowColor:GetRGBA()))
@@ -933,6 +975,7 @@ local function update()
     else lastReason="Ready to pull" end
     for i,slot in ipairs(slots) do
         local action=queue[i]
+        slot.key:SetText(bindingFor(action and action.spell))
         slot.icon:SetTexture(action and action.spell.icon or 132337)
         local label=action and action.spell.name or (i==1 and "Wait" or "")
         if action and (action.selfHeal or action.family=="layHands" or action.family=="holyLight" or action.family=="flashLight") then label=label.." (self)" end
@@ -946,7 +989,8 @@ local function update()
     if preview then
         local action=defensive()
         if action then
-            emergencyIcon:SetTexture(action.spell.icon)
+            emergencyKey:SetText(bindingFor(action.spell))
+    emergencyIcon:SetTexture(action.spell.icon)
             emergencyLabel:SetText(action.spell.name..(action.family=="layHands" and " (self)" or ""))
             emergency:SetAlpha(1); emergency:Show(); slots[1].holder:SetAlpha(0)
         end
@@ -999,8 +1043,10 @@ for _,event in ipairs({"PLAYER_ENTERING_WORLD","SPELLS_CHANGED","PLAYER_REGEN_EN
     "TRAIT_CONFIG_UPDATED","PLAYER_TALENT_UPDATE","NAME_PLATE_UNIT_ADDED","NAME_PLATE_UNIT_REMOVED","PLAYER_STARTED_MOVING","PLAYER_STOPPED_MOVING","LOSS_OF_CONTROL_ADDED","LOSS_OF_CONTROL_UPDATE","BAG_UPDATE_DELAYED","CHAT_MSG_MONSTER_EMOTE","PLAYER_TARGET_CHANGED","UNIT_SPELLCAST_SENT","UNIT_SPELLCAST_SUCCEEDED","UPDATE_SHAPESHIFT_FORM","UNIT_AURA"}) do
     pcall(driver.RegisterEvent,driver,event)
 end
+for event in pairs(bindingEvents) do pcall(driver.RegisterEvent,driver,event) end
 driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID,...)
     if not settings then init() end
+    if bindingEvents[event] then spellKeys=nil end
     if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then catalog.ClearTarget();judgedUtility=nil;fleeingUntil=nil end
     if event=="PLAYER_REGEN_ENABLED" then judgedUtility=nil;fleeingUntil=nil end
     if event=="CHAT_MSG_MONSTER_EMOTE" then
@@ -1110,7 +1156,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Experimental="..tostring(settings.experimental).." potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.7.0 | "..(class or "unknown").." | "..lastReason)
+        say("0.7.1 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do

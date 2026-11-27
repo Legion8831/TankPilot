@@ -5,7 +5,12 @@ function methods:SetScript(k,v) self[k]=v end
 function methods:CreateTexture()
     local t=setmetatable({}, {__index=methods}); textures[#textures+1]=t; return t
 end
-function methods:CreateFontString() return setmetatable({}, {__index=methods}) end
+local hotkeys={}
+function methods:CreateFontString(_,_,template)
+ local font=setmetatable({}, {__index=methods})
+ if template=="NumberFontNormal" then hotkeys[#hotkeys+1]=font end
+ return font
+end
 function methods:SetText(v) self.text=v end
 function methods:SetTexture(v) self.texture=v end
 function methods:SetAlpha(v) self.alpha=v end
@@ -629,3 +634,12 @@ assert(textures[1].texture==1752)
 channelLocked=false;tick();assert(textures[1].texture==1766 and textures[2].texture==1752)
 C_Spell.IsSpellInRange=function(id) return id~=1766 end;tick();assert(textures[1].texture==1752)
 UnitChannelInfo=nil;C_Spell.IsSpellInRange=function() return true end
+ProtPilotCharacterDB={profile='protection'};power=100;fresh('PALADIN',{26573})
+ActionButton5={action=5}
+local key='5'
+GetBindingKey=function(cmd) if cmd=='ACTIONBUTTON5' then return key end end
+GetBindingAction=function(k) if k==key then return 'ACTIONBUTTON5' end end
+GetActionInfo=function(slot) if slot==5 then return 'spell',26573 end end
+event('UPDATE_BINDINGS');assert(hotkeys[1].text=='5',tostring(textures[1].texture)..' key '..tostring(hotkeys[1].text))
+key='SHIFT-5';event('UPDATE_BINDINGS');assert(hotkeys[1].text=='S-5')
+ActionButton5.action=17;event('ACTIONBAR_PAGE_CHANGED');assert(rawget(hotkeys[1],'text')==nil)

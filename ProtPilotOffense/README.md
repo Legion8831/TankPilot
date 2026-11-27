@@ -1,3 +1,7 @@
+# Tank Pilot 0.7.1
+
+Now, Next, and Then display the assigned Blizzard action-button key on the icon. Empty or unbound slots show no key.
+
 # Tank Pilot 0.7.0
 
 Each profile keeps its learned-spell damage or tank priority. The queue recalculates on target, movement, resources, and group changes. An interrupt requires a readable interruptible cast or channel, a learned usable interrupt, and a positive range check. Personal survival and mapped boss warnings retain priority. Healing specializations provide damage suggestions and personal survival assistance. Group healing target selection is outside these profiles.
