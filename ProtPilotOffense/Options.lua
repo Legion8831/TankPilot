@@ -88,7 +88,7 @@ function O.Open(api)
         p=pages[2]
         check(p,'Health-based survival recommendations','health',0,0)
         check(p,'Healing potions from your bags','potions',0,-32)
-        check(p,'Paladin self-healing (solo only)','selfheal',0,-64)
+        check(p,'Recommend solo self-healing','selfheal',0,-64)
         check(p,'Control breaks and racials','breaks',0,-96)
         check(p,'Dispel cue','dispelcue',0,-128)
         check(p,'Defensives for mapped DBM warnings','boss',0,-160)

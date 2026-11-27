@@ -1,3 +1,21 @@
+# Tank Pilot 0.7.0
+
+Each profile keeps its learned-spell damage or tank priority. The queue recalculates on target, movement, resources, and group changes. An interrupt requires a readable interruptible cast or channel, a learned usable interrupt, and a positive range check. Personal survival and mapped boss warnings retain priority. Healing specializations provide damage suggestions and personal survival assistance. Group healing target selection is outside these profiles.
+
+| Class and profiles | Situational behavior |
+|---|---|
+| Warrior: Arms, Fury, Protection | Pummel or Shield Bash when available. Arms and Fury conserve burst under group aggro. Protection can recover a loose mob without taunting another assigned tank. |
+| Paladin: Holy, Retribution, Protection | Holy saves mana when assigned to heal. Ret retains damage seals. Protection can use talented Holy Shock, and Auto uses Righteousness while another assigned tank holds the target. |
+| Druid: Balance, Cat, Bear, Restoration | Avoid high-mana Innervate and frontal Shred. Bear recovers loose party mobs. Restoration reserves healing mana and can suggest a stationary solo heal in caster form. |
+| Hunter: Beast Mastery, Marksmanship, Survival | Bestial Wrath requires a live pet. Skip late Sting and Mark on low-health normal enemies. Survival favors the melee list when already in Raptor Strike range. Deterrence can appear under direct pressure. |
+| Mage: Arcane, Fire, Frost | Counterspell readable casts. Avoid stationary channels while moving and avoid Frost Nova on a pack held by someone else. Ice Barrier can take priority at low health. |
+| Priest: Discipline, Holy, Shadow | Assigned healers use the mana reserve, including in forecast slots. A wand can fill the gap. Shadow avoids long DoTs on dying normal mobs and moving Mind Flay. Learned Desperate Prayer is a personal emergency option. |
+| Rogue: Assassination, Combat, Subtlety | Kick and return to the builder/finisher sequence. Stealth openers only forecast while stealth is available. Avoid Backstab when the target faces the player. Evasion can surface under pressure. |
+| Shaman: Elemental, Enhancement, Restoration | Earth Shock can interrupt and reserves the shared shock cooldown in the forecast. Restoration preserves healing mana. Solo self-healing requires a readable health trigger and standing still. |
+| Warlock: Affliction, Demonology, Destruction | Avoid long DoTs on dying trash, Hellfire under direct aggro, and Life Tap during group aggro. Recognized dungeon bosses can qualify for Doom. A forecast Shadow Bolt consumes Nightfall. |
+
+The low-health trash rule uses 20% on normal/weak enemies as a heuristic. The grouped healer reserve uses the player setting (/ppoff mana, default 20%) when assigned HEALER and costs are readable. Unknown cast flags, range, or health cannot confirm a reactive action.
+
 # Tank Pilot 0.6.7
 
 Auto can recommend Crusader and Judgement on a recognized boss, or Justice and Judgement for a target emitting a readable English flee warning. In a group these sequences require secure threat. The forecast returns to your normal seal afterwards.

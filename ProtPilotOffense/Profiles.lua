@@ -79,6 +79,10 @@ P.burst={[3045]=true,[19574]=true,[12042]=true,[11129]=true,[12043]=true,[13750]
     [1259821]=true,[1259813]=true,[1259823]=true,[18288]=true}
 local extras={HUNTER={19574,3045},MAGE={12042},ROGUE={13877,1943},SHAMAN={16166},
     WARRIOR={12328},PALADIN={20375,879,2812,24275},PRIEST={10060}}
+-- Register these as ordinary learned spell families so the same rank,
+-- readiness and affordability checks apply to interrupts and attacks.
+P.interrupts={WARRIOR={6552,72},ROGUE={1766},MAGE={2139},SHAMAN={8042}}
+P.personalGuard={ROGUE=5277,HUNTER=19263,MAGE=11426,PRIEST=19236}
 local tanks={WARRIOR='protection',PALADIN='protection',DRUID='feral_bear'}
 local treeOrder={WARRIOR={'arms','fury','protection'},PALADIN={'holy','protection','retribution'},
     DRUID={'balance','feral','restoration'},HUNTER={'beast_mastery','marksmanship','survival'},
@@ -149,6 +153,8 @@ function P.Extend(profiles)
         end
         for _,id in ipairs(D.classSpells[classKey]) do add(id) end
         for _,id in ipairs(extras[class] or {}) do add(id) end
+        if P.personalGuard[class] then add(P.personalGuard[class]) end
+        for _,id in ipairs(P.interrupts[class] or {}) do add(id) end
         p.families.willSurvive={1259718};p.families.forsaken={7744};p.families.escapeArtist={20589}
     end
 end
@@ -198,7 +204,11 @@ local function gates(list,ctx,m,any)
 end
 local function auraState(ctx,id,unit,m)
     local key=unit..':'..id
-    if m.applied and m.applied[key] then return true,m.applied[key]-m.time,1 end
+    if m.consumed and m.consumed[key] then return false,0,0 end
+    if m.applied and m.applied[key] then
+        local remaining=m.applied[key]-m.time
+        return remaining>0,math.max(0,remaining),remaining>0 and 1 or 0
+    end
     local spell=resolve(ctx,id) or {id=id,name=read(C_Spell.GetSpellName,id)}
     local present,expiration,stacks=ctx.aura(spell,unit)
     local remaining=expiration and (expiration==0 and math.huge or expiration-GetTime()-m.time)
@@ -246,7 +256,10 @@ function gate(g,ctx,m)
         if v==nil then return nil end
         return invert(math.max(v,m.cooldowns[spell.id] or 0)<=m.time,g.neg)
     end
-    if t=='stealth' then return invert(read(IsStealthed),g.neg) end
+    if t=='stealth' then
+        if m.brokeStealth then return invert(false,g.neg) end
+        return invert(read(IsStealthed),g.neg)
+    end
     if t=='totem' then
         if m.totems and m.totems[g.slot] then return invert(true,g.neg) end
         return invert(read(GetTotemInfo,g.slot),g.neg)
@@ -265,9 +278,55 @@ function gate(g,ctx,m)
     -- Unsupported timing, unconfirmed proc, or starvation conditions stay unknown.
     return nil
 end
+local openers={[1833]=true,[703]=true,[8676]=true,[6785]=true}
+local positional={[53]=true,[5221]=true}
+local longDots={[1978]=true,[589]=true,[2944]=true,[172]=true,[980]=true,[603]=true,
+    [1079]=true,[1943]=true,[5570]=true}
+local healerTree={restoration=true,holy=true,discipline=true}
+local function situational(ctx,m,id,spell)
+    if openers[id] and (m.brokeStealth or read(IsStealthed)~=true) then return false end
+    if id==1833 and ctx.grouped and not ctx.targetingPlayer and not ctx.boss then return false end
+    if id==1833 and ctx.boss then return false end
+    if id==5676 and ctx.grouped and ctx.targetingPlayer then return false end
+    if id==75 and ctx.key=='survival' and ctx.meleeHunter then return false end
+    if id==29166 and ctx.manaFraction and ctx.manaFraction>.35 then return false end
+    if (id==12051 or id==1949 or id==15407 or id==5143) and ctx.stationary()==false then return false end
+    if positional[id] and ctx.targetingPlayer then return false end
+    if ctx.grouped and ctx.targetingPlayer and (P.burst[id] or id==1949 or id==1454) then return false end
+    if id==1949 and ctx.targetingPlayer then return false end
+    if id==122 and ctx.grouped and not ctx.targetingPlayer then return false end
+    if (longDots[id] or id==7386 or id==1130) and ctx.dyingTrash then return false end
+    if ctx.healReserve and m.power then
+        local amount=ctx.cost(spell)
+        if amount and amount>0 and m.power-amount<ctx.healReserve then return false end
+    end
+    return true
+end
+function P.Context(ctx)
+    ctx.grouped=read(IsInGroup)==true
+    ctx.targetingPlayer=read(UnitIsUnit,'targettarget','player')==true
+    local hp,maximum=read(UnitHealth,'target'),read(UnitHealthMax,'target')
+    local kind=read(UnitClassification,'target')
+    ctx.boss=kind=='worldboss' or (read(UnitExists,'boss1')==true and read(UnitIsUnit,'boss1','target')==true)
+    if ctx.class=='HUNTER' then
+        local melee=resolve(ctx,2973)
+        ctx.meleeHunter=melee and read(C_Spell.IsSpellInRange,melee.id,'target')==true
+    elseif ctx.class=='DRUID' then
+        local mana,cap=read(UnitPower,'player',0),read(UnitPowerMax,'player',0)
+        if type(mana)=='number' and type(cap)=='number' and cap>0 then ctx.manaFraction=mana/cap end
+    end
+    ctx.dyingTrash=(kind=='normal' or kind=='minus') and type(hp)=='number' and
+        type(maximum)=='number' and maximum>0 and hp<=maximum*.2
+    if ctx.grouped and healerTree[ctx.key] and read(UnitGroupRolesAssigned,'player')=='HEALER' then
+        local mana=read(UnitPowerMax,'player',0)
+        if type(mana)=='number' then ctx.healReserve=mana*ctx.settings.mana/100 end
+    end
+    return ctx
+end
 local function candidate(ctx,m,e)
     local spell=resolve(ctx,e.id);if not spell then return end
     local id=P.Base(spell.id)
+    if not situational(ctx,m,id,spell) then return end
     if P.burst[id] and not ctx.settings.cooldowns then return end
     if (id==8042 or id==8050 or id==8056) and m.shockUntil and m.shockUntil>m.time then return end
     -- Never repeat an unknown cooldown in the same forecast. Verified zero-CD fillers can repeat.
@@ -276,7 +335,7 @@ local function candidate(ctx,m,e)
         [399956]=true,[16511]=true,[1082]=true,[5221]=true,[1449]=true}
     if m.used and m.used[id] and not fillers[id] and ctx.expectedCooldown(spell)==nil then return end
     if generators[id] and type(m.combo)=='number' and m.combo>=5 then return end
-    if id==603 and read(UnitClassification,'target')~='worldboss' then return end
+    if id==603 and not ctx.boss then return end
     if id==24275 then
         -- Usability is the game's execute gate; it is already checked below.
         if m.used and m.used[id] then return end
@@ -291,7 +350,7 @@ local function candidate(ctx,m,e)
     end
     if (id==1329555 or id==2687) and (type(m.power)~='number' or m.power>60) then return end
     if (id==12328 or id==1719) and read(UnitThreatSituation,'player','target')==3 then return end
-    if id==19574 and read(UnitExists,'pet')~=true then return end
+    if id==19574 and (read(UnitExists,'pet')~=true or read(UnitIsDeadOrGhost,'pet')==true) then return end
     if id==768 and read(GetShapeshiftFormID)==1 then return end
     if id==2457 and read(GetShapeshiftFormID)==17 then return end
     if id==2458 and read(GetShapeshiftFormID)==19 then return end
@@ -323,7 +382,7 @@ local function candidate(ctx,m,e)
     if finishers[id] and (type(m.combo)~='number' or m.combo<1) then return end
     if (id==78 or id==845) and (m.swingQueued or type(m.power)~='number' or m.power<ctx.settings.reserve+15) then return end
     if gates(e.gates,ctx,m,false)~=true then return end
-    if m.time>0 and e.delegated then return end
+    if m.time>0 and e.delegated and not fillers[id] then return end
     if not ctx.usable(spell,m,P.burst[id] or selfEffects[id]) then return end
     local info=read(C_Spell.GetSpellInfo,spell.id)
     local castMS=info and plain(info.castTime)
@@ -362,6 +421,12 @@ function P.Advance(m,action)
     local id=action.baseID or P.Base(action.spell.id)
     m.used=m.used or {};m.used[id]=true
     if action.catalogEntry then
+        local proc=id==686 and 17941 or id==5143 and 44404
+        if proc then
+            m.consumed=m.consumed or {}
+            m.consumed['player:'..proc]=true
+        end
+        if openers[id] or generators[id] and id~=14183 then m.brokeStealth=true end
         if finishers[id] then m.combo=0 elseif generators[id] and m.combo then m.combo=math.min(5,m.combo+generators[id]) end
         if id==5308 then m.power=0 end
         local duration=effectDurations[id]

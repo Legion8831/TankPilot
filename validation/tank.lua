@@ -454,6 +454,20 @@ for token,trees in pairs(ProtPilotCatalog.trees) do
    local ids=ProtPilotCatalog.classSpells[token]
    fresh(c,ids)
    assert(textures[1].texture~=132337,'empty class profile: '..c..' '..key)
+   local previousGroup=IsInGroup
+   local knownIcons={}
+   for _,id in ipairs(ids) do knownIcons[id]=true end
+   for _,group in ipairs({false,true}) do
+    IsInGroup=function() return group end
+    for _,count in ipairs({1,2,4}) do
+     npCount=count;cmd('auto');clock=clock+2;tick()
+     for slot=1,3 do
+      local icon=textures[slot].texture
+      assert(icon==132337 or knownIcons[icon],c..' '..key..' invalid slot '..slot)
+     end
+    end
+   end
+   IsInGroup=previousGroup;npCount=1;cmd('single')
    checked=checked+1
   end
  end
@@ -547,3 +561,71 @@ UnitClassification=function() return 'normal' end
 event('PLAYER_TARGET_CHANGED')
 event('CHAT_MSG_MONSTER_EMOTE','%s attempts to run away in fear!','Dungeon ghoul')
 assert(textures[1].texture==20164 and textures[2].texture==20271 and textures[3].texture==20154,'runner seal sequence')
+
+-- Interrupts need an interruptible, in-range live cast, then resume the profile.
+UnitCastingInfo=function(unit)
+ if unit=='target' then return 'Enemy heal',nil,nil,clock*1000,(clock+2)*1000,nil,nil,false end
+end
+for _,row in ipairs({{'MAGE','fire',2139,133},{'ROGUE','combat',1766,1752},
+ {'SHAMAN','elemental',8042,403},{'WARRIOR','fury',6552,23881}}) do
+ ProtPilotCharacterDB={profile=row[2]}
+ fresh(row[1],{row[3],row[4]})
+ assert(textures[1].texture==row[3] and textures[2].texture~=row[3],row[1]..' interrupt followed by rotation')
+end
+UnitCastingInfo=function() return 'Protected',nil,nil,nil,(clock+2)*1000,nil,nil,true end
+ProtPilotCharacterDB={profile='fire'};fresh('MAGE',{2139,133})
+assert(textures[1].texture==133,'protected cast skips Counterspell')
+UnitCastingInfo=nil
+ProtPilotCharacterDB={profile='holy'};power=25
+UnitGroupRolesAssigned=function() return 'HEALER' end
+IsInGroup=function() return true end
+fresh('PRIEST',{585,5019})
+C_Spell.GetSpellPowerCost=function(id) return {{type=0,cost=id==5019 and 0 or 10}} end
+tick();assert(textures[1].texture==5019,'group healer saves mana and wands')
+IsInGroup=function() return false end;tick();assert(textures[1].texture==585,'solo priest spends mana')
+
+-- Change one encounter signal at a time; keep gear and the spellbook fixed.
+UnitGroupRolesAssigned=function(unit) return unit=='targettarget' and 'TANK' or 'DAMAGER' end
+UnitIsUnit=function(a,b) return a==b end
+IsInGroup=function() return true end
+power=100; hp=1
+ProtPilotCharacterDB={profile='protection'}
+fresh('PALADIN',{1311649,20154,20271})
+assert(textures[1].texture==20154,'other tank owns target: use damage seal')
+for _,row in ipairs({{'WARRIOR','protection',355,23922},{'DRUID','feral_bear',6795,407995}}) do
+ ProtPilotCharacterDB={profile=row[2]}
+ fresh(row[1],{row[3],row[4]})
+ assert(textures[1].texture~=row[3],'do not taunt another tank')
+ UnitGroupRolesAssigned=function() return 'DAMAGER' end;tick()
+ assert(textures[1].texture==row[3] and textures[2].texture~=row[3],'recover party aggro once')
+ UnitGroupRolesAssigned=function() return 'TANK' end
+end
+IsInGroup=function() return false end
+UnitIsUnit=function(a,b) return a=='targettarget' and b=='player' or a==b end
+ProtPilotCharacterDB={profile='combat'}
+fresh('ROGUE',{53,1752});assert(textures[1].texture==1752,'solo frontal rogue builder')
+ProtPilotCharacterDB={profile='survival'}
+fresh('HUNTER',{75,2973});assert(textures[1].texture==2973,'melee survival starts melee attack')
+UnitClassification=function() return 'normal' end
+UnitHealth=function(unit) return unit=='target' and 10 or 100 end
+ProtPilotCharacterDB={profile='affliction'}
+fresh('WARLOCK',{172,686});assert(textures[1].texture==686,'do not start Corruption on dying trash')
+ProtPilotCharacterDB={profile='restoration'}
+fresh('DRUID',{8921,5176});assert(textures[1].texture==8921 or textures[1].texture==5176)
+-- Pet-dependent cooldowns require a live pet. The cooldowns option still controls burst.
+ProtPilotCharacterDB={profile='beast_mastery'};ProtPilotSettingsAPI.set('cooldowns',true)
+local unitDead=UnitIsDeadOrGhost
+UnitIsDeadOrGhost=function(unit) return unit=='pet' end
+fresh('HUNTER',{19574,3044}); assert(textures[1].texture==3044,'dead pet suppresses Bestial Wrath')
+UnitIsDeadOrGhost=unitDead
+-- A protected channel must not offer Kick; an interruptible channel must.
+UnitCastingInfo=function() end
+local channelLocked=true
+UnitChannelInfo=function(unit)
+ if unit=='target' then return 'Channel',nil,nil,nil,(clock+2)*1000,nil,channelLocked end
+end
+ProtPilotCharacterDB={profile='combat'};fresh('ROGUE',{1766,1752})
+assert(textures[1].texture==1752)
+channelLocked=false;tick();assert(textures[1].texture==1766 and textures[2].texture==1752)
+C_Spell.IsSpellInRange=function(id) return id~=1766 end;tick();assert(textures[1].texture==1752)
+UnitChannelInfo=nil;C_Spell.IsSpellInRange=function() return true end

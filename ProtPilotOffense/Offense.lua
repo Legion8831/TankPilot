@@ -1,4 +1,4 @@
--- Tank Pilot 0.6.7. All recommendations require a manual player action.
+-- Tank Pilot 0.7.0. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -20,7 +20,7 @@ local profiles = {
     }},
     PALADIN = {label="Protection Paladin", families={
         holyStrike={679,678,1866,680,2495,5569,10332,10333},
-        holyShield={20925}, consecration={26573}, judgement={20271}, swiftJudgement={1310994}, hammerWrath={24275}, holyWrath={2812},
+        holyShock={1311606,20473,20929,20930}, holyShield={20925}, consecration={26573}, judgement={20271}, swiftJudgement={1310994}, hammerWrath={24275}, holyWrath={2812},
         righteousness={20154,21084,20287,20288,20289,20290,20291,20292,20293},
         crusader={21082,20162,20305,20306,20307,20308}, justice={20164},
         fury={1311649}, righteousFury={25780}, devotion={465}, retribution={7294},
@@ -45,6 +45,13 @@ profiles.PALADIN.families.cleanse={4987}
 profiles.PALADIN.families.freedom={1044}
 profiles.PALADIN.families.holyLight={635}
 profiles.PALADIN.families.flashLight={19750}
+profiles.SHAMAN=profiles.SHAMAN or {families={}}
+profiles.PRIEST=profiles.PRIEST or {families={}}
+profiles.SHAMAN.families.lesserWave={8004,8008,8010,10466,10467,10468}
+profiles.SHAMAN.families.healingWave={331,332,547,913,939,959,8005,10395,10396}
+profiles.PRIEST.families.flashHeal={2061,9472,9473,9474,10915,10916,10917}
+profiles.PRIEST.families.lesserHeal={2050,2052,2053}
+profiles.DRUID.families.healingTouch={5185,5186,5187,5188,5189,6778,8903,9758,9888,9889}
 if catalog then catalog.Extend(profiles) end
 local function plain(v)
     if issecretvalue and issecretvalue(v) then return nil end
@@ -276,9 +283,14 @@ local function bleedAllowed()
     local id=creatureID()
     return settings.rend and not (id and ProtPilotOffenseBleedImmune[id])
 end
+local function anotherTankHasTarget()
+    return read(IsInGroup)==true and read(UnitIsUnit,"targettarget","player")==false
+        and read(UnitGroupRolesAssigned,"targettarget")=="TANK"
+end
 local function selectedSeal()
     if settings.seal=="manual" then return nil end
     if settings.seal=="auto" then
+        if spells.righteousness and anotherTankHasTarget() then return "righteousness" end
         if isTank and spells.fury and (not spells.righteousness or read(IsInGroup)~=false) then
             return "fury"
         end
@@ -373,11 +385,32 @@ local function dumpReady(family, model)
     local amount=cost(spell) or 15
     return model.power>=reserve+amount and usable(spell,model)
 end
+local function interrupt(model)
+    if model.time~=0 or model.interrupted or not catalog.interrupts[class] then return end
+    local function interruptible(fn,flag)
+        if type(fn)~="function" then return false end
+        local ok,name,_,_,_,ends,_,a,b=pcall(fn,"target")
+        ends=number(ends)
+        local locked
+        if flag==7 then locked=plain(a) else locked=plain(b) end
+        return ok and plain(name)~=nil and locked==false and ends and ends>GetTime()*1000
+    end
+    if not interruptible(UnitCastingInfo,8) and not interruptible(UnitChannelInfo,7) then return end
+    for _,id in ipairs(catalog.interrupts[class]) do
+        local spell=catalog.Resolve({byID=byID},id)
+        if spell and usable(spell,model) and read(C_Spell.IsSpellInRange,spell.id,"target")==true then
+            return {spell=spell,family=spell.family,baseID=id,interrupt=true,reason="Interrupt target cast"}
+        end
+    end
+end
 local function rotation(model)
+    local stop=interrupt(model)
+    if stop then return stop end
     if not isTank and catalog then
-        return catalog.Choose({class=class,key=profileKey,tank=false,byID=byID,targets=enemyCount,
+        if not model.context then model.context=catalog.Context({cost=cost,class=class,key=profileKey,tank=false,byID=byID,targets=enemyCount,
             settings=settings,aura=aura,cooldown=cooldown,expectedCooldown=expectedCooldown,usable=usable,bleedAllowed=bleedAllowed,
-            stationary=function() return survival and survival.Stationary() end},model)
+            stationary=function() return survival and survival.Stationary() end}) end
+        return catalog.Choose(model.context,model)
     end
     local result=setup(model,true)
     if result then return result end
@@ -393,11 +426,11 @@ local function rotation(model)
         end
     end
     local lostThreat=read(UnitThreatSituation,"player","target")
-    if lostThreat==0 or lostThreat==1 or lostThreat==2 then
+    if read(IsInGroup)==true and not anotherTankHasTarget() and not model.recovered and (lostThreat==0 or lostThreat==1) then
         local taunt=class=="WARRIOR" and "taunt" or class=="DRUID" and "growl"
         if taunt then
             result=choose(taunt,"Recover lost threat")
-            if result then return result end
+            if result then result.recoversThreat=true;return result end
         end
     end
     local rageLow=model.power and model.power<10 and model.time==0
@@ -459,7 +492,8 @@ local function rotation(model)
                 end
             end
         end
-        local recover=seal=="fury" and (lostThreat==0 or lostThreat==1)
+        if seal=="fury" and anotherTankHasTarget() then sealActive=false end
+        local recover=read(IsInGroup)==true and seal=="fury" and (lostThreat==0 or lostThreat==1)
         if recover and sealActive and model.time==0 and not model.recovered then
             result=choose("judgement","Recover threat with Fury") or choose("swiftJudgement","Recover threat with Swift Judgement")
             if result then result.recoversThreat=true;return result end
@@ -493,6 +527,8 @@ local function rotation(model)
             result=choose("swiftJudgement","Additional Judgement from active seal")
             if result then return result end
         end
+        result=choose("holyShock","Holy Shock damage and threat")
+        if result then return result end
         local offTank=read(UnitIsUnit,"targettarget","player")==false and (lostThreat==0 or lostThreat==1)
         if offTank and survival.Stationary()==true then
             result=choose("hammerWrath","Execute while off-tanking")
@@ -545,6 +581,10 @@ local function advance(model, action)
     local spell,family=action.spell,action.family
     if sealFamilies[family] then model.seal=family end
     if action.utility then model.judgedUtility=action.utility end
+    if action.interrupt then
+        model.interrupted=true
+        if action.baseID==8042 then model.shockUntil=model.time+6 end
+    end
     if action.recoversThreat then model.recovered=true end
     if spell.item then return end
     if catalog then catalog.Advance(model,action) end
@@ -568,7 +608,8 @@ local function advance(model, action)
     if family=="revenge" or family=="victoryRush" then model.cooldowns[spell.id]=math.huge end
     if family=="heroic" or family=="cleave" or family=="maul" then
         model.swingQueued=true
-    elseif family~="judgement" and family~="swiftJudgement" and family~="block" then
+    elseif family~="judgement" and family~="swiftJudgement" and family~="block" and
+        not (action.interrupt and (action.baseID==1766 or action.baseID==2139 or action.baseID==6552)) then
         local info=read(C_Spell and C_Spell.GetSpellInfo,spell.id)
         local castTime=info and number(info.castTime)
         model.time=model.time+math.max(1.5,(castTime or 0)/1000)
@@ -695,6 +736,8 @@ local function planned(timer)
     end
 end
 
+local soloHeals={PALADIN={"flashLight","holyLight"},SHAMAN={"lesserWave","healingWave"},
+    PRIEST={"flashHeal","lesserHeal"},DRUID={"healingTouch"}}
 local function survivalAction(combat)
     if not combat or not survival then return nil end
     if settings.breaks then
@@ -714,6 +757,14 @@ local function survivalAction(combat)
         local potion=survival.Potion()
         if potion then return {spell=potion,family="potion",reason="Emergency healing potion"},true end
     end
+    local guardID=catalog.personalGuard[class]
+    if guardID and (class=="PRIEST" or read(UnitIsUnit,"targettarget","player")==true) then
+        local guard=catalog.Resolve({byID=byID},guardID)
+        if guard and usable(guard,nil,true) and not active(guard.family)
+            and survival.Below(settings.thresholds[guard.family] or .35,settings.experimental)==true then
+            return entry(guard.family,"Low health: personal defensive"),true
+        end
+    end
     if not defensiveActive() then
         -- At critical health prefer emergency recovery; otherwise preserve class ordering.
         local rules=defensiveRules[class] or {}
@@ -726,15 +777,21 @@ local function survivalAction(combat)
         end
     end
     -- Solo cast-time healing only, stationary and not already casting.
-    if settings.selfheal and class=="PALADIN" and read(IsInGroup)==false
+    if settings.selfheal and soloHeals[class] and read(IsInGroup)==false
+        and (class~="DRUID" or (not isTank and profileKey~="feral" and not read(GetShapeshiftFormID)))
+        and (class~="PRIEST" or not active("spell15473"))
         and survival.Stationary()==true
         and survival.Below(settings.thresholds.selfheal or .45,settings.experimental)==true then
         local fn=UnitCastingInfo
         if type(fn)=="function" then
             local ok,current=pcall(fn,"player")
             if ok and not (issecretvalue and issecretvalue(current)) and current==nil then
-                for _,family in ipairs({"flashLight","holyLight"}) do
-                    if usable(spells[family],nil,true) then return entry(family,"Heal yourself (solo)"),true end
+                for _,family in ipairs(soloHeals[class]) do
+                    if usable(spells[family],nil,true) then
+                        local action=entry(family,"Heal yourself (solo)")
+                        action.selfHeal=true
+                        return action,true
+                    end
                 end
             end
         end
@@ -878,7 +935,7 @@ local function update()
         local action=queue[i]
         slot.icon:SetTexture(action and action.spell.icon or 132337)
         local label=action and action.spell.name or (i==1 and "Wait" or "")
-        if action and (action.family=="layHands" or action.family=="holyLight" or action.family=="flashLight") then label=label.." (self)" end
+        if action and (action.selfHeal or action.family=="layHands" or action.family=="holyLight" or action.family=="flashLight") then label=label.." (self)" end
         if action and action.delay and action.delay>.05 then
             label=label..string.format("\n~%.1fs",action.delay)
         end
@@ -1053,7 +1110,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Experimental="..tostring(settings.experimental).." potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.6.7 | "..(class or "unknown").." | "..lastReason)
+        say("0.7.0 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do
