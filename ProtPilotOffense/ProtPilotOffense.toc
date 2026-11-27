@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Tank Pilot Offense
 ## Notes: Tank and DPS recommendations for all nine classes in WoW Forever.
-## Version: 0.6.6
+## Version: 0.6.7
 ## SavedVariables: ProtPilotExorcismNPCs, ProtPilotOffenseBleedImmune, ProtPilotOffenseDB
 ## SavedVariablesPerCharacter: ProtPilotCharacterDB
 ## OptionalDeps: DBM-Core

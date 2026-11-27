@@ -1,3 +1,7 @@
+# Tank Pilot 0.6.7
+
+Auto can recommend Crusader and Judgement on a recognized boss, or Justice and Judgement for a target emitting a readable English flee warning. In a group these sequences require secure threat. The forecast returns to your normal seal afterwards.
+
 # Tank Pilot 0.6.6
 
 Protection Paladin Auto prefers Righteousness solo and Fury in groups when learned. Use /ppoff seal auto to enable it, or select a fixed seal under AddOns > Tank Pilot.

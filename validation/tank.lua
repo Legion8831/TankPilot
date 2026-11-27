@@ -538,3 +538,12 @@ mobID='222';event('PLAYER_TARGET_CHANGED')
 assert(not ProtPilotProfiles.ValidHolyTarget(879),'different NPC')
 cmd('exorcism allow');assert(ProtPilotProfiles.ValidHolyTarget(879))
 cmd('exorcism clear');assert(not ProtPilotProfiles.ValidHolyTarget(879))
+IsInGroup=function() return false end
+UnitClassification=function() return 'worldboss' end
+fresh('PALADIN',{20154,21082,20271,20164})
+cmd('seal auto');tick()
+assert(textures[1].texture==21082 and textures[2].texture==20271 and textures[3].texture==20154,'boss seal sequence')
+UnitClassification=function() return 'normal' end
+event('PLAYER_TARGET_CHANGED')
+event('CHAT_MSG_MONSTER_EMOTE','%s attempts to run away in fear!','Dungeon ghoul')
+assert(textures[1].texture==20164 and textures[2].texture==20271 and textures[3].texture==20154,'runner seal sequence')

@@ -45,6 +45,6 @@ function S.Report(summary)
         edit:SetFontObject(ChatFontNormal);edit:SetWidth(660);edit:SetMaxLetters(0)
         edit:SetScript('OnEscapePressed',function() reportFrame:Hide() end);scroll:SetScrollChild(edit)
     end
-    edit:SetText('Tank Pilot 0.6.6\n'..summary..'\nLast 200 changes; timestamps are session seconds.\n'..table.concat(lines,'\n'))
+    edit:SetText('Tank Pilot 0.6.7\n'..summary..'\nLast 200 changes; timestamps are session seconds.\n'..table.concat(lines,'\n'))
     reportFrame:Show();edit:SetFocus();edit:HighlightText()
 end

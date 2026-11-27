@@ -1,4 +1,4 @@
--- Tank Pilot 0.6.6. All recommendations require a manual player action.
+-- Tank Pilot 0.6.7. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -22,6 +22,7 @@ local profiles = {
         holyStrike={679,678,1866,680,2495,5569,10332,10333},
         holyShield={20925}, consecration={26573}, judgement={20271}, swiftJudgement={1310994}, hammerWrath={24275}, holyWrath={2812},
         righteousness={20154,21084,20287,20288,20289,20290,20291,20292,20293},
+        crusader={21082,20162,20305,20306,20307,20308}, justice={20164},
         fury={1311649}, righteousFury={25780}, devotion={465}, retribution={7294},
         kings={20217}, might={19740}, protection={498,5573}, bulwark={1311015}, layHands={633},
         exorcism={879,5614,5615,10312,10313,10314},
@@ -206,6 +207,7 @@ local function due(family, unit, duration, model)
     if not spell then return false end
     local key=effectKey(family,unit)
     local simulated=key and model and model.effects[key]
+    if model and model.seal and unit=="player" and family~=model.seal and (family=="fury" or family=="righteousness") then return true end
     if simulated then return simulated<=model.time+1 end
     local present, expiration=aura(spell,unit)
     if present==false then return true end
@@ -291,7 +293,7 @@ local function selectedBuff(setting, preferred, fallback)
     if active(fallback) then return fallback end
     return spells[preferred] and preferred or fallback
 end
-local durations={shout=120, demo=30, rend=21, righteousness=30, fury=30,
+local durations={shout=120, demo=30, rend=21, righteousness=30, fury=30, crusader=30, justice=30,
     righteousFury=1800, devotion=3600, retribution=3600, kings=300, might=300,
     mark=1800, thorns=600, faerie=40, roar=30, lacerate=15, block=5}
 local function entry(family, reason)
@@ -303,10 +305,32 @@ local function upkeep(family, unit, model)
         return entry(family,"Maintain "..spells[family].name)
     end
 end
+local sealFamilies={fury=true,righteousness=true,crusader=true,justice=true}
+local lastSeal, judgedUtility, fleeingUntil
+local function utilitySeal(model)
+    if settings.seal~="auto" or model.judgedUtility or judgedUtility then return end
+    if read(UnitCanAttack,"player","target")~=true then return end
+    if read(IsInGroup)~=false and read(UnitThreatSituation,"player","target")~=3 then return end
+    if not usable(spells.judgement,model) then return end
+    local family,reason
+    if fleeingUntil and GetTime()+model.time<fleeingUntil then
+        family,reason="justice","Stop the runner"
+    elseif read(UnitClassification,"target")=="worldboss" or
+        (read(UnitExists,"boss1")==true and read(UnitIsUnit,"boss1","target")==true) then
+        family,reason="crusader","Increase Holy damage on the boss"
+    end
+    if not family or not spells[family] then return end
+    if model.seal==family or (not model.seal and not due(family,"player",30,model)) then
+        local action=entry("judgement",reason)
+        action.utility=family
+        return action
+    end
+    if usable(spells[family],model,true) then return entry(family,reason) end
+end
 local function setup(model, combat)
     if class=="PALADIN" then
         local seal=selectedSeal()
-        local result=(isTank and upkeep("righteousFury","player",model)) or (isTank and upkeep(seal,"player",model))
+        local result=(isTank and upkeep("righteousFury","player",model)) or (isTank and combat and utilitySeal(model)) or (isTank and upkeep(seal,"player",model))
         if result then return result end
         if not combat then
             return upkeep(selectedBuff(settings.aura,"retribution","devotion"),"player",model)
@@ -519,6 +543,8 @@ end
 -- Unreadable resource income and future reactive procs are never invented.
 local function advance(model, action)
     local spell,family=action.spell,action.family
+    if sealFamilies[family] then model.seal=family end
+    if action.utility then model.judgedUtility=action.utility end
     if action.recoversThreat then model.recovered=true end
     if spell.item then return end
     if catalog then catalog.Advance(model,action) end
@@ -895,6 +921,14 @@ local function recordCast(id)
     playerAuraCache[id]=nil
     for family,spell in pairs(spells) do
         if spell.id==id then
+            if sealFamilies[family] then
+                lastSeal=family
+                for other in pairs(sealFamilies) do
+                    if other~=family and spells[other] then effects[other]=nil;playerAuraCache[spells[other].id]=nil end
+                end
+            elseif family=="judgement" and (lastSeal=="justice" or lastSeal=="crusader") and effects[lastSeal] and now-effects[lastSeal]<30 then
+                judgedUtility=lastSeal
+            end
             local targetEffect=family=="rend" or family=="demo" or family=="roar" or family=="faerie" or family=="lacerate"
             local key=effectKey(family,targetEffect and "target" or "player")
             if key then effects[key]=now end
@@ -905,12 +939,20 @@ local function recordCast(id)
 end
 local driver=CreateFrame("Frame")
 for _,event in ipairs({"PLAYER_ENTERING_WORLD","SPELLS_CHANGED","PLAYER_REGEN_ENABLED",
-    "TRAIT_CONFIG_UPDATED","PLAYER_TALENT_UPDATE","NAME_PLATE_UNIT_ADDED","NAME_PLATE_UNIT_REMOVED","PLAYER_STARTED_MOVING","PLAYER_STOPPED_MOVING","LOSS_OF_CONTROL_ADDED","LOSS_OF_CONTROL_UPDATE","BAG_UPDATE_DELAYED","PLAYER_TARGET_CHANGED","UNIT_SPELLCAST_SENT","UNIT_SPELLCAST_SUCCEEDED","UPDATE_SHAPESHIFT_FORM","UNIT_AURA"}) do
+    "TRAIT_CONFIG_UPDATED","PLAYER_TALENT_UPDATE","NAME_PLATE_UNIT_ADDED","NAME_PLATE_UNIT_REMOVED","PLAYER_STARTED_MOVING","PLAYER_STOPPED_MOVING","LOSS_OF_CONTROL_ADDED","LOSS_OF_CONTROL_UPDATE","BAG_UPDATE_DELAYED","CHAT_MSG_MONSTER_EMOTE","PLAYER_TARGET_CHANGED","UNIT_SPELLCAST_SENT","UNIT_SPELLCAST_SUCCEEDED","UPDATE_SHAPESHIFT_FORM","UNIT_AURA"}) do
     pcall(driver.RegisterEvent,driver,event)
 end
-driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID)
+driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID,...)
     if not settings then init() end
-    if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then catalog.ClearTarget() end
+    if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then catalog.ClearTarget();judgedUtility=nil;fleeingUntil=nil end
+    if event=="PLAYER_REGEN_ENABLED" then judgedUtility=nil;fleeingUntil=nil end
+    if event=="CHAT_MSG_MONSTER_EMOTE" then
+        local msg,sender=plain(unit),plain(castArg)
+        local guid=plain(select(8,...))
+        if guid=="" then guid=nil end
+        if type(msg)=="string" and msg:find("attempts to run away in fear",1,true) and
+            ((guid and guid==read(UnitGUID,"target")) or (not guid and sender and sender==read(UnitName,"target"))) then fleeingUntil=GetTime()+8 end
+    end
     if survival then survival.MovementEvent(event) end
     if event=="PLAYER_ENTERING_WORLD" or event=="SPELLS_CHANGED" or event=="TRAIT_CONFIG_UPDATED" or event=="PLAYER_TALENT_UPDATE" or event=="UPDATE_SHAPESHIFT_FORM" then needsScan=true end
     if event=="UNIT_SPELLCAST_SENT" and plain(unit)=="player" and spells.exorcism and number(sentID)==spells.exorcism.id then
@@ -1011,7 +1053,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Experimental="..tostring(settings.experimental).." potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.6.6 | "..(class or "unknown").." | "..lastReason)
+        say("0.6.7 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do
