@@ -1,4 +1,4 @@
--- Tank Pilot 0.6.5. All recommendations require a manual player action.
+-- Tank Pilot 0.6.6. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -276,7 +276,12 @@ local function bleedAllowed()
 end
 local function selectedSeal()
     if settings.seal=="manual" then return nil end
-    if settings.seal=="auto" then return isTank and spells.fury and "fury" or "righteousness" end
+    if settings.seal=="auto" then
+        if isTank and spells.fury and (not spells.righteousness or read(IsInGroup)~=false) then
+            return "fury"
+        end
+        return "righteousness"
+    end
     return settings.seal
 end
 local function selectedBuff(setting, preferred, fallback)
@@ -1006,7 +1011,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Experimental="..tostring(settings.experimental).." potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.6.5 | "..(class or "unknown").." | "..lastReason)
+        say("0.6.6 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do

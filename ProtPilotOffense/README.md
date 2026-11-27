@@ -1,3 +1,7 @@
+# Tank Pilot 0.6.6
+
+Protection Paladin Auto prefers Righteousness solo and Fury in groups when learned. Use /ppoff seal auto to enable it, or select a fixed seal under AddOns > Tank Pilot.
+
 # Tank Pilot 0.6.5
 
 Protection Paladin prioritizes affordable Consecration on single targets and packs. Routine Holy Shield comes first on single targets. On packs, Consecration comes first. Urgent survival and Fury threat recovery retain priority. The mana reserve applies when resource information is readable.

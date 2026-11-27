@@ -221,14 +221,17 @@ tick()
 assert(textures[1].texture==679, "cast-based cooldown forecast")
 assert(frames[2].alpha==1)
 
--- Tank auto prefers learned Fury and a Righteousness cast cannot override policy.
+-- Solo damage preference changes to tanking seal on joining a group.
 fresh("PALADIN",{20154,1311649,20271})
 cmd("seal auto")
+assert(textures[1].texture==20154)
+IsInGroup=function() return true end;tick()
 assert(textures[1].texture==1311649)
 cast(20154)
 assert(ProtPilotOffenseDB.seal=="auto")
 assert(textures[1].texture==1311649)
 cmd("seal righteousness")
+IsInGroup=function() return false end
 assert(ProtPilotOffenseDB.seal=="righteousness")
 -- Integrated survival: control break beats attacks even without a hostile target.
 C_LossOfControl={GetActiveLossOfControlDataCount=function() return 1 end,
