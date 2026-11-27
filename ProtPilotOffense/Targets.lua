@@ -15,7 +15,7 @@ function T.Update(mode)
     local now=GetTime()
     if T.at and now-T.at<.25 and T.mode==mode then return T.count end
     T.at=now;T.mode=mode
-    local count,unknown,targetSeen=0,false,false
+    local count,unknown,targetSeen,identityUnknown=0,false,false,false
     for i=1,40 do
         local unit='nameplate'..i
         local exists=read(UnitExists,unit)
@@ -24,17 +24,23 @@ function T.Update(mode)
             local threat=read(UnitThreatSituation,'player',unit)
             if type(threat)=='number' then
                 count=count+1
-                if read(UnitIsUnit,unit,'target')==true then targetSeen=true end
+                local same=read(UnitIsUnit,unit,'target')
+                if same==true then targetSeen=true elseif same==nil then identityUnknown=true end
             elseif read(UnitAffectingCombat,unit)==true then
                 -- Combat alone does not prove this mob belongs to our pull.
                 unknown=true
             end
         end
     end
+    if count>0 and not targetSeen and not identityUnknown
+        and read(UnitCanAttack,'player','target')==true and read(UnitIsDeadOrGhost,'target')==false
+        and type(read(UnitThreatSituation,'player','target'))=='number' then
+        count=count+1
+    end
     if not targetSeen and count==0 and read(UnitCanAttack,'player','target')==true then count=1 end
     -- Delay a downgrade briefly to avoid flicker when nameplates churn.
     if count<T.count and T.source=='engaged nameplates' and T.lastHigher and now-T.lastHigher<.6 then return T.count end
-    if count>=T.count or T.source~='engaged nameplates' then T.lastHigher=now end
+    T.lastHigher=now
     T.count=math.max(1,count)
     T.source=count>1 and 'engaged nameplates' or unknown and 'limited visibility / single fallback' or 'engaged nameplates'
     return T.count

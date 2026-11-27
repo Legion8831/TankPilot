@@ -1,3 +1,9 @@
+# Rotation Pilot 0.8.0
+
+Install the included `ProtPilotOffense` directory over the existing addon. Open `/rpilot` for options or use the existing `/ppoff` alias. The saved-variable names are unchanged.
+
+This release revises health priorities, overlapping and paused DBM timers, engaged target counting, target-specific utility Judgements, and channel and stance forecasts. Use `/rpilot why Exorcism` for readiness checks or `/rpilot report` for the queue and recent events. Copy reports before reloading.
+
 # Tank Pilot 0.7.1
 
 Now, Next, and Then display the assigned Blizzard action-button key on the icon. Empty or unbound slots show no key.
@@ -244,27 +250,13 @@ All actions remain manual recommendations. Your previous settings are retained.
 - Later slots assume the first action succeeds. We do not simulate healing amounts,
   future health, or the removal of every concurrent control effect.
 
-## Experimental health decisions
+## Health decisions
 
-Enabled by default for this test build. First tries readable health; otherwise uses
-an adaptation of JustAC's curve + TruncateWhenZero + FontString readback approach.
-This depends on undocumented readback behavior, not a guaranteed API contract.
-Plain widget checks and guarded calls catch some failures, not every possible client change.
-Unknown results retain the existing visual defensive overlay. Potions and cast-time
-heals require an actual yes/no result and do not use that fallback.
-
-`/ppoff status` reports health source (readable, experimental readback, or visual fallback)
-and control status. At full health and while injured, check that recommendations change
-appropriately. If the experimental result behaves incorrectly, disable it:
-
-```
-/ppoff experimental off
-```
+Readable health can change all three recommendations. When health is restricted, the client renders the appropriate survival icon over Now. Next, Then, and the report continue to describe the underlying queue. A visual cue can therefore differ from the report. At the default thresholds a ready Lay on Hands wins below 20%, followed by a carried usable potion below 30%. Settings, cooldowns, group state and available spells determine the remaining bands.
 
 ## Controls
 
 ```
-/ppoff experimental on
 /ppoff potions on
 /ppoff breaks on
 /ppoff selfheal on

@@ -14,53 +14,14 @@ local function call(fn,...)
     local ok,a,b,c=pcall(fn,...)
     if ok then return safe(a),safe(b),safe(c) end
 end
-local scratch,check,curves = nil,nil,{}
-local function zero(value)
-    local v=safe(value)
-    if type(v)=='number' then return v==0 end
-    if not C_StringUtil or not C_StringUtil.TruncateWhenZero then return nil end
-    local ok,result=pcall(function()
-        if not scratch then
-            local holder=CreateFrame('Frame'); holder:Hide()
-            scratch=holder:CreateFontString(nil,'BACKGROUND','GameFontNormal')
-            check=holder:CreateFontString(nil,'BACKGROUND','GameFontNormal')
-        end
-        check:SetText('1')
-        if safe(check:GetText())~='1' then return nil end
-        if scratch.ClearText then scratch:ClearText() end
-        scratch:SetText(C_StringUtil.TruncateWhenZero(value))
-        local text=scratch:GetText()
-        -- Experimental JustAC readback: only string existence, never its contents.
-        if text then return false end
-        return true
-    end)
-    if ok then return result end
-end
-function S.Below(threshold,experimental)
+function S.Below(threshold)
     local health=call(UnitHealth,'player')
     local maximum=call(UnitHealthMax,'player')
     if type(health)=='number' and type(maximum)=='number' and maximum>0 then
-        S.healthStatus='readable'; return health/maximum<threshold
+        S.healthStatus='readable'
+        return health/maximum<threshold
     end
-    if not experimental then S.healthStatus='visual fallback'; return nil end
-    local ok,result=pcall(function()
-        if not (C_CurveUtil and C_CurveUtil.CreateCurve and UnitHealthPercent) then return nil end
-        local curve=curves[threshold]
-        if not curve then
-            curve=C_CurveUtil.CreateCurve(); curve:SetType(Enum.LuaCurveType.Linear)
-            curve:AddPoint(0,100); curve:AddPoint(threshold-.001,100)
-            curve:AddPoint(threshold+.001,0); curve:AddPoint(1,0)
-            if curve:Evaluate(threshold-.01)<1 or curve:Evaluate(threshold+.01)>=1 then return nil end
-            curves[threshold]=curve
-        end
-        local value=UnitHealthPercent('player',false,curve)
-        if value==nil then return nil end
-        local isZero=zero(value)
-        if isZero==nil then return nil end
-        return not isZero
-    end)
-    if ok and result~=nil then S.healthStatus='experimental readback'; return result end
-    S.healthStatus='visual fallback'; return nil
+    S.healthStatus='visual fallback'
 end
 -- Narrow, deterministic matching. Never select a general immunity as a CC break.
 -- Forever racial ID and mechanics from JustAC Data/CCBreakers.lua.

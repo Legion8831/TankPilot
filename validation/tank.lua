@@ -119,7 +119,7 @@ callbacks.DBM_TimerBegin("DBM_TimerBegin","secret",marker,marker,nil,"next",mark
 -- Timer pause/resume and unmapped bars ignored.
 callbacks.DBM_TimerBegin("DBM_TimerBegin","test","Tank Buster",2,nil,"next",nil)
 callbacks.DBM_TimerPause("DBM_TimerPause","test"); tick(); assert(textures[1].texture~=498)
-callbacks.DBM_TimerResume("DBM_TimerResume","test"); tick(); assert(textures[1].texture==498)
+clock=clock+10; tick(); callbacks.DBM_TimerResume("DBM_TimerResume","test"); tick(); assert(textures[1].texture==498)
 cmd("demo off")
 -- Sunder can repeat and remains available with queued swings, Clap in single target.
 fresh("WARRIOR",{7386})
@@ -256,7 +256,14 @@ C_Item={GetItemCount=function(id) return id==858 and 2 or 0 end,
  GetItemNameByID=function() return "Lesser Healing Potion" end,
  GetItemIconByID=function(id) return id end}
 fresh("PALADIN",{20154,20271,633,498})
-assert(textures[1].texture==858,"carried potion before emergency spell")
+assert(textures[1].texture==633,"critical LoH before potion")
+UnitHealth=function() return marker end; hp=.12; tick()
+assert(frames[5].shown and frames[5].alpha==1 and textures[4].texture==633,"visual LoH below 20 percent")
+hp=.25;tick();assert(frames[5].alpha==0 and frames[2].alpha==0,"second survival band masks offense")
+hp=.95;tick();assert(frames[2].alpha==1,"healthy restores offense")
+UnitHealth=function() return 25 end; tick()
+assert(textures[1].texture==858,"potion above LoH threshold")
+UnitHealth=function() return 15 end
 C_Item.GetItemCooldown=function() return clock,120,1 end
 tick(); assert(textures[1].texture==633,"cooling potion falls through to LoH")
 cmd("health off"); assert(textures[1].texture~=633)
@@ -273,27 +280,9 @@ IsInGroup=function() return true end; tick()
 assert(textures[1].texture~=635,"no unsolicited group cast-time heal")
 cmd("visibility combat"); combat=false; tick(); assert(not frames[1].shown)
 cmd("visibility always"); assert(frames[1].shown)
--- Experimental health method: simulate engine numeric curves and secret text output.
-local stored=methods.SetText
-function methods:GetText() return rawget(self,"text") end
-function methods:ClearText() self.text=nil end
-function methods:SetText(v) if v=="" then self.text=nil else self.text=v end end
-C_CurveUtil.CreateCurve=function()
- local curve={}
- function curve:SetType() end
- function curve:AddPoint(x,y) if x>0 and y==100 then self.cut=x end end
- function curve:Evaluate(x) return x<=self.cut and 100 or 0 end
- return curve
-end
-local raw=100
+-- Restricted health is visual only.
 UnitHealth=function() return marker end
-UnitHealthPercent=function() return marker end
-C_StringUtil={TruncateWhenZero=function() return raw==0 and "" or marker end}
-assert(ProtPilotSurvival.Below(.3,true)==true)
-raw=0; assert(ProtPilotSurvival.Below(.3,true)==false)
-C_StringUtil.TruncateWhenZero=function() error("unavailable") end
-assert(ProtPilotSurvival.Below(.3,true)==nil,"broken readback unknown")
-assert(ProtPilotSurvival.Below(.3,false)==nil,"experimental switch")
+assert(ProtPilotSurvival.Below(.3)==nil)
 -- Missing APIs: readable cooldown no longer assumed; diagnostics remain usable.
 C_Spell.GetSpellCooldown=nil
 tick(); cmd("status")
@@ -398,7 +387,7 @@ cmd('options');assert(#frames==frameCount,'reuse options window')
 combat=false
 local registeredCategory,registerCount=nil,0
 Settings={RegisterCanvasLayoutCategory=function(panel,name)
- assert(name=='Tank Pilot' and panel.name==name);return {ID=111}
+ assert(name=='Rotation Pilot' and panel.name==name);return {ID=111}
 end,RegisterAddOnCategory=function(cat) registeredCategory=cat;registerCount=registerCount+1 end}
 ProtPilotOptions.Register(ProtPilotSettingsAPI)
 ProtPilotOptions.Register(ProtPilotSettingsAPI)
@@ -412,6 +401,12 @@ UnitThreatSituation=function(_,unit) return unit=='nameplate4' and nil or 1 end
 UnitAffectingCombat=function() return true end
 clock=clock+10
 assert(ProtPilotTargets.Update('auto')==3)
+local identity=UnitIsUnit
+UnitIsUnit=function() return false end;clock=clock+1
+assert(ProtPilotTargets.Update('auto')==4,'engaged target missing from plates')
+UnitIsUnit=function() return marker end;clock=clock+1
+assert(ProtPilotTargets.Update('auto')==3,'unknown identity cannot add target')
+UnitIsUnit=identity
 npCount=1;clock=clock+.3;assert(ProtPilotTargets.Update('auto')==3,'short downgrade hysteresis')
 clock=clock+1;assert(ProtPilotTargets.Update('auto')==1)
 assert(ProtPilotTargets.Update('aoe')==4)
@@ -642,4 +637,8 @@ GetBindingAction=function(k) if k==key then return 'ACTIONBUTTON5' end end
 GetActionInfo=function(slot) if slot==5 then return 'spell',26573 end end
 event('UPDATE_BINDINGS');assert(hotkeys[1].text=='5',tostring(textures[1].texture)..' key '..tostring(hotkeys[1].text))
 key='SHIFT-5';event('UPDATE_BINDINGS');assert(hotkeys[1].text=='S-5')
-ActionButton5.action=17;event('ACTIONBAR_PAGE_CHANGED');assert(rawget(hotkeys[1],'text')==nil)
+ActionButton5.action=17;event('ACTIONBAR_PAGE_CHANGED');assert(hotkeys[1].text=='')
+
+assert(SLASH_PROTPILOTOFFENSE1=="/rpilot" and SLASH_PROTPILOTOFFENSE2=="/ppoff")
+cmd("why 26573")
+cmd("report")

@@ -1,4 +1,4 @@
--- Tank Pilot 0.7.1. All recommendations require a manual player action.
+-- Rotation Pilot 0.8.0. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
 local needsScan, elapsed = true, 0
 local casts, effects, observedCooldowns = {}, {}, {}
@@ -67,7 +67,7 @@ local function number(v)
     v=plain(v)
     if type(v)=="number" and v==v then return v end
 end
-local function say(msg) print("Tank Pilot: "..msg) end
+local function say(msg) print("Rotation Pilot: "..msg) end
 local function init()
     if type(ProtPilotOffenseDB)~="table" then ProtPilotOffenseDB={} end
     settings=ProtPilotOffenseDB
@@ -76,7 +76,7 @@ local function init()
         settings.sealPolicyVersion=1
     end
     local defaults={targetMode="auto", cooldowns=true, aoe=false, seal="auto", aura="auto", blessing="auto",
-        locked=true, scale=1, showNames=true, showReason=true, showTitle=true, health=true, dispelcue=true, experimental=true, potions=true, breaks=true, selfheal=true, visibility="auto", boss=true, reserve=30, mana=20, demo=false, rend=true}
+        locked=true, scale=1, showNames=true, showReason=true, showTitle=true, health=true, dispelcue=true, potions=true, breaks=true, selfheal=true, visibility="auto", boss=true, reserve=30, mana=20, demo=false, rend=true}
     for k,v in pairs(defaults) do if settings[k]==nil then settings[k]=v end end
     if type(settings.thresholds)~="table" then settings.thresholds={} end
     if type(settings.bossSpells)~="table" then settings.bossSpells={} end
@@ -319,8 +319,9 @@ local function upkeep(family, unit, model)
 end
 local sealFamilies={fury=true,righteousness=true,crusader=true,justice=true}
 local lastSeal, judgedUtility, fleeingUntil
+local judgedTargets={}
 local function utilitySeal(model)
-    if settings.seal~="auto" or model.judgedUtility or judgedUtility then return end
+    if settings.seal~="auto" or model.judgedUtility then return end
     if read(UnitCanAttack,"player","target")~=true then return end
     if read(IsInGroup)~=false and read(UnitThreatSituation,"player","target")~=3 then return end
     if not usable(spells.judgement,model) then return end
@@ -332,6 +333,16 @@ local function utilitySeal(model)
         family,reason="crusader","Increase Holy damage on the boss"
     end
     if not family or not spells[family] then return end
+    local guid=read(UnitGUID,"target")
+    local memo=judgedUtility
+    if guid then memo=judgedTargets[guid] end
+    local debuffID=family=="justice" and 20184 or 21183
+    local name=read(C_Spell.GetSpellName,debuffID)
+    local present,expiry
+    if name then present,expiry=readAura({id=debuffID,name=name},"target") end
+    if present and (not expiry or expiry==0 or expiry>GetTime()+model.time+1) then return end
+    if memo and memo.family==family and memo.expires>GetTime()+model.time and
+        (present==nil or GetTime()-memo.cast<1) then return end
     if model.seal==family or (not model.seal and not due(family,"player",30,model)) then
         local action=entry("judgement",reason)
         action.utility=family
@@ -577,6 +588,7 @@ end
 
 -- Simulate successive decisions using only readable costs and cooldowns.
 -- Unreadable resource income and future reactive procs are never invented.
+local channels={[15407]=3,[5143]=5,[12051]=8,[1949]=15,[10]=8,[5740]=8,[1120]=15,[689]=5}
 local function advance(model, action)
     local spell,family=action.spell,action.family
     if sealFamilies[family] then model.seal=family end
@@ -612,7 +624,7 @@ local function advance(model, action)
         not (action.interrupt and (action.baseID==1766 or action.baseID==2139 or action.baseID==6552)) then
         local info=read(C_Spell and C_Spell.GetSpellInfo,spell.id)
         local castTime=info and number(info.castTime)
-        model.time=model.time+math.max(1.5,(castTime or 0)/1000)
+        model.time=model.time+math.max(1.5,(castTime or 0)/1000,channels[catalog.Base(spell.id)] or 0)
     end
 end
 local function buildQueue(combat, firstAction, pullTarget)
@@ -673,7 +685,10 @@ local function dbmCallback(event,id,...)
         if event=="DBM_TimerUpdate" then
             local spent,total=...
             spent,total=number(spent),number(total)
-            if spent and total then timer.finish=GetTime()+total-spent end
+            if spent and total then
+                timer.finish=GetTime()+total-spent
+                if timer.paused then timer.paused=math.max(0,total-spent) end
+            end
         elseif event=="DBM_TimerPause" and not timer.paused then
             timer.paused=math.max(0,timer.finish-GetTime())
         elseif event=="DBM_TimerResume" and timer.paused then
@@ -692,17 +707,9 @@ local function registerDBM()
         end
     end
 end
-local function incoming()
-    if not settings.boss then return nil end
-    for id,timer in pairs(timers) do
-        local remaining=timer.finish-GetTime()
-        if remaining < -1 then timers[id]=nil
-        elseif not timer.paused and remaining<=2 and remaining>=0 then return timer end
-    end
-end
 local defensiveRules={
     WARRIOR={{"lastStand",0.40},{"wall",0.25}},
-    PALADIN={{"bulwark",0.40},{"layHands",0.20},{"protection",0.35}},
+    PALADIN={{"layHands",0.20},{"bulwark",0.40},{"protection",0.35}},
     DRUID={{"barkskin",0.50},{"regeneration",0.35}},
 }
 local defensiveDurations={lastStand=20,wall=10,protection=8,bulwark=12,layHands=1,barkskin=15,regeneration=10}
@@ -713,12 +720,13 @@ local function defensiveActive()
             (casts[spell.id] and GetTime()-casts[spell.id]<defensiveDurations[rule[1]])) then return true end
     end
 end
-local function defensive()
-    if defensiveActive() then return nil end
+local function previewDefensive()
+    local protected=defensiveActive()
     for _,rule in ipairs(defensiveRules[class] or {}) do
         local allowed=rule[1]~="protection" or read(IsInGroup)==false
-        if allowed and usable(spells[rule[1]],nil,true) then
-            return entry(rule[1],rule[1]=="layHands" and "Emergency self heal" or "Low health"),settings.thresholds[rule[1]] or rule[2]
+        local threshold=settings.thresholds[rule[1]] or rule[2]
+        if allowed and (not protected or rule[1]=="layHands") and usable(spells[rule[1]],nil,true) then
+            return entry(rule[1],rule[1]=="layHands" and "Emergency self heal" or "Low health"),threshold
         end
     end
 end
@@ -736,8 +744,64 @@ local function planned(timer)
     end
 end
 
+local function incoming(combat)
+    if not settings.boss then return end
+    local now,best,chosen,bestID=GetTime()
+    for id,timer in pairs(timers) do
+        local left=timer.finish-now
+        if not timer.paused then
+            if left < -1 then timers[id]=nil
+            elseif left>=0 and left<=2 and (combat or timer.demo) then
+                local action=planned(timer)
+                if action and (not best or timer.finish<best or
+                    (timer.finish==best and tostring(id)<bestID)) then
+                    best,chosen,bestID=timer.finish,action,tostring(id)
+                end
+            end
+        end
+    end
+    return chosen
+end
 local soloHeals={PALADIN={"flashLight","holyLight"},SHAMAN={"lesserWave","healingWave"},
     PRIEST={"flashHeal","lesserHeal"},DRUID={"healingTouch"}}
+local function visitHealthActions(add)
+    if usable(spells.layHands,nil,true) then
+        if add(entry("layHands","Emergency self heal"),settings.thresholds.layHands or .20) then return end
+    end
+    if settings.potions then
+        local potion=survival.Potion()
+        if potion and add({spell=potion,family="potion",reason="Emergency healing potion"},settings.thresholds.potion or .30) then return end
+    end
+    local guardID=catalog.personalGuard[class]
+    if guardID and (class=="PRIEST" or read(UnitIsUnit,"targettarget","player")==true) then
+        local guard=catalog.Resolve({byID=byID},guardID)
+        if guard and usable(guard,nil,true) and not active(guard.family)
+            and add(entry(guard.family,"Low health: personal defensive"),settings.thresholds[guard.family] or .35) then return end
+    end
+    if not defensiveActive() then
+        for _,rule in ipairs(defensiveRules[class] or {}) do
+            local family=rule[1]
+            if family~="layHands" and (family~="protection" or read(IsInGroup)==false) and usable(spells[family],nil,true) then
+                if add(entry(family,"Low health"),settings.thresholds[family] or rule[2]) then return end
+            end
+        end
+    end
+    if settings.selfheal and read(IsInGroup)==false and survival.Stationary()==true
+        and (class~="DRUID" or (not isTank and profileKey~="feral" and not read(GetShapeshiftFormID)))
+        and (class~="PRIEST" or not active("spell15473")) and type(UnitCastingInfo)=="function" then
+        local ok,cast=pcall(UnitCastingInfo,"player")
+        if ok and not (issecretvalue and issecretvalue(cast)) and cast==nil then
+            for _,family in ipairs(soloHeals[class] or {}) do
+                if usable(spells[family],nil,true) then
+                    local action=entry(family,"Solo heal")
+                    action.selfHeal=true
+                    add(action,settings.thresholds.selfheal or .45)
+                    break
+                end
+            end
+        end
+    end
+end
 local function survivalAction(combat)
     if not combat or not survival then return nil end
     if settings.breaks then
@@ -753,49 +817,12 @@ local function survivalAction(combat)
         end
     end
     if not settings.health then return nil end
-    if settings.potions and survival.Below(settings.thresholds.potion or .30,settings.experimental)==true then
-        local potion=survival.Potion()
-        if potion then return {spell=potion,family="potion",reason="Emergency healing potion"},true end
-    end
-    local guardID=catalog.personalGuard[class]
-    if guardID and (class=="PRIEST" or read(UnitIsUnit,"targettarget","player")==true) then
-        local guard=catalog.Resolve({byID=byID},guardID)
-        if guard and usable(guard,nil,true) and not active(guard.family)
-            and survival.Below(settings.thresholds[guard.family] or .35,settings.experimental)==true then
-            return entry(guard.family,"Low health: personal defensive"),true
-        end
-    end
-    if not defensiveActive() then
-        -- At critical health prefer emergency recovery; otherwise preserve class ordering.
-        local rules=defensiveRules[class] or {}
-        if class=="PALADIN" then rules={{"layHands",.20},{"bulwark",.40},{"protection",.35}} end
-        for _,rule in ipairs(rules) do
-            if (rule[1]~="protection" or read(IsInGroup)==false) and usable(spells[rule[1]],nil,true)
-                and survival.Below(settings.thresholds[rule[1]] or rule[2],settings.experimental)==true then
-                return entry(rule[1],"Low health: "..spells[rule[1]].name),true
-            end
-        end
-    end
-    -- Solo cast-time healing only, stationary and not already casting.
-    if settings.selfheal and soloHeals[class] and read(IsInGroup)==false
-        and (class~="DRUID" or (not isTank and profileKey~="feral" and not read(GetShapeshiftFormID)))
-        and (class~="PRIEST" or not active("spell15473"))
-        and survival.Stationary()==true
-        and survival.Below(settings.thresholds.selfheal or .45,settings.experimental)==true then
-        local fn=UnitCastingInfo
-        if type(fn)=="function" then
-            local ok,current=pcall(fn,"player")
-            if ok and not (issecretvalue and issecretvalue(current)) and current==nil then
-                for _,family in ipairs(soloHeals[class]) do
-                    if usable(spells[family],nil,true) then
-                        local action=entry(family,"Heal yourself (solo)")
-                        action.selfHeal=true
-                        return action,true
-                    end
-                end
-            end
-        end
-    end
+    if survival.Below(.5)==nil then return end
+    local chosen
+    visitHealthActions(function(action,threshold)
+        if survival.Below(threshold) then chosen=action; return true end
+    end)
+    return chosen,chosen~=nil
 end
 
 local frame=CreateFrame("Frame",nil,UIParent)
@@ -866,17 +893,22 @@ for i=1,3 do
     label:SetJustifyV("TOP")
     slots[i]={holder=holder,icon=icon,label=label,key=keyOverlay(holder)}
 end
-local emergency=CreateFrame("Frame",nil,frame)
-emergency:SetAllPoints(slots[1].holder)
-local emergencyIcon=emergency:CreateTexture(nil,"OVERLAY")
-emergencyIcon:SetAllPoints(emergency)
-emergencyIcon:SetTexCoord(.08,.92,.08,.92)
-local emergencyKey=keyOverlay(emergency)
-local emergencyLabel=emergency:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
-emergencyLabel:SetPoint("TOP",emergency,"BOTTOM",0,-4)
-emergencyLabel:SetWidth(90)
-emergencyLabel:SetHeight(44)
-emergencyLabel:SetJustifyV("TOP")
+local function makeHealthSlot()
+    local holder=CreateFrame("Frame",nil,frame)
+    holder:SetAllPoints(slots[1].holder)
+    local icon=holder:CreateTexture(nil,"OVERLAY")
+    icon:SetAllPoints(holder)
+    icon:SetTexCoord(.08,.92,.08,.92)
+    local label=holder:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    label:SetPoint("TOP",holder,"BOTTOM",0,-4)
+    label:SetWidth(90)
+    label:SetHeight(44)
+    label:SetJustifyV("TOP")
+    return {holder=holder,icon=icon,label=label,key=keyOverlay(holder)}
+end
+local healthSlots={makeHealthSlot()}
+local emergency=healthSlots[1].holder
+local emergencyIcon,emergencyLabel,emergencyKey=healthSlots[1].icon,healthSlots[1].label,healthSlots[1].key
 local title=frame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
 title:SetPoint("BOTTOMLEFT",frame,"TOPLEFT",0,30)
 local reason=frame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
@@ -895,7 +927,7 @@ local dispelHeading=frame:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
 dispelHeading:SetPoint("BOTTOMLEFT",frame,"TOPLEFT",290,7);dispelHeading:SetText("DISPEL")
 local moveHint=frame:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
 moveHint:SetPoint("TOPLEFT",frame,"BOTTOMLEFT",0,-44)
-moveHint:SetText("Drag to move. Lock in /ppoff options.")
+moveHint:SetText("Drag to move. Lock in /rpilot options.")
 local curveCache={}
 local function curves(threshold)
     if curveCache[threshold] then return curveCache[threshold][1],curveCache[threshold][2] end
@@ -912,18 +944,48 @@ local function curves(threshold)
     curveCache[threshold]={low,normal}
     return low,normal
 end
-local function paintEmergency(action,threshold)
-    local low,normal=curves(threshold)
-    local lowColor=UnitHealthPercent("player",true,low)
-    local normalColor=UnitHealthPercent("player",true,normal)
-    emergencyKey:SetText(bindingFor(action.spell))
-    emergencyIcon:SetTexture(action.spell.icon)
-    emergencyLabel:SetText(action.spell.name..(action.family=="layHands" and " (self)" or ""))
-    emergency:SetAlpha(select(4,lowColor:GetRGBA()))
-    slots[1].holder:SetAlpha(select(4,normalColor:GetRGBA()))
-    emergency:Show()
+-- Render disjoint health bands directly through client-owned color curves.
+local bandCache={}
+local function paintHealthBands()
+    local used,lower=0,0
+    local function add(action,upper)
+        if not action or upper<=lower then return end
+        used=used+1
+        local slot=healthSlots[used] or makeHealthSlot()
+        healthSlots[used]=slot
+        local key=lower.."/"..upper
+        local curve=bandCache[key]
+        if not curve then
+            curve=C_CurveUtil.CreateColorCurve()
+            curve:SetType(Enum.LuaCurveType.Linear)
+            if lower>0 then
+                curve:AddPoint(0,CreateColor(1,1,1,0))
+                curve:AddPoint(lower-.001,CreateColor(1,1,1,0))
+            end
+            curve:AddPoint(lower,CreateColor(1,1,1,1))
+            curve:AddPoint(upper-.001,CreateColor(1,1,1,1))
+            curve:AddPoint(upper,CreateColor(1,1,1,0))
+            curve:AddPoint(1,CreateColor(1,1,1,0))
+            bandCache[key]=curve
+        end
+        local color=UnitHealthPercent("player",true,curve)
+        slot.key:SetText(bindingFor(action.spell))
+        slot.icon:SetTexture(action.spell.icon)
+        slot.label:SetText(action.spell.name..((action.family=="layHands" or action.selfHeal) and " (self)" or ""))
+        slot.label:SetShown(settings.showNames)
+        slot.holder:SetAlpha(select(4,color:GetRGBA()))
+        slot.holder:Show()
+        lower=upper
+    end
+    visitHealthActions(add)
+    if used>0 then
+        local _,normal=curves(lower)
+        local color=UnitHealthPercent("player",true,normal)
+        slots[1].holder:SetAlpha(select(4,color:GetRGBA()))
+    end
 end
 local unlocked,preview=false,false
+local lastQueue={}
 local function update()
     if not settings then init() end
     if needsScan and not InCombatLockdown() then scan(); needsScan=false; registerDBM() end
@@ -956,9 +1018,7 @@ local function update()
         and read(UnitIsDeadOrGhost,"target")~=true
     if read(UnitIsDeadOrGhost,"player")==true then frame:Hide(); return end
     local form=formNeeded()
-    local timer=incoming()
-    local plan=not form and planned(timer)
-    if not combat and not (timer and timer.demo) then plan=nil end
+    local plan=not form and incoming(combat)
     local urgent=survivalAction(combat)
     if survival then
         local dispel=spells.cleanse or spells.purify
@@ -967,8 +1027,18 @@ local function update()
     local queue=buildQueue(combat and target,urgent or plan,not combat and target)
     if combat and not target and not plan and not urgent then queue={} end
     if form and spells[form] and not urgent and (combat or not queue[1]) then
-        queue={entry(form,"Tank stance / form required")}
+        local change=entry(form,"Required stance / form")
+        if combat and target and class=="WARRIOR" and read(UnitPowerType,"player")==1 then
+            queue=buildQueue(true,change,false)
+            for i=2,#queue do
+                if queue[i].family==form or (cost(queue[i].spell) or 1)>0 then
+                    for j=#queue,i,-1 do queue[j]=nil end
+                    break
+                end
+            end
+        else queue={change} end
     end
+    lastQueue=queue
     if not queue[1] and combat and target then
         lastReason="Pool resources / wait for a readable usable ability"
     elseif queue[1] then lastReason=queue[1].reason
@@ -985,23 +1055,21 @@ local function update()
         slot.label:SetText(label)
         slot.holder:SetAlpha(i==1 and 1 or (action and .75 or .25))
     end
-    emergency:Hide()
+    for _,slot in ipairs(healthSlots) do slot.holder:Hide() end
     if preview then
-        local action=defensive()
+        local action=previewDefensive()
         if action then
             emergencyKey:SetText(bindingFor(action.spell))
     emergencyIcon:SetTexture(action.spell.icon)
             emergencyLabel:SetText(action.spell.name..(action.family=="layHands" and " (self)" or ""))
             emergency:SetAlpha(1); emergency:Show(); slots[1].holder:SetAlpha(0)
         end
-    elseif combat and target and not form and not urgent and settings.health then
-        local action,threshold=defensive()
-        if action and (not survival or survival.Below(threshold,settings.experimental)==nil) then
-            local ok=pcall(paintEmergency,action,threshold)
-            if not ok then
-                emergency:Hide(); slots[1].holder:SetAlpha(1)
-                lastReason="Health display unavailable — /ppoff status"
-            end
+    elseif combat and not urgent and settings.health and survival.Below(.5)==nil then
+        local ok=pcall(paintHealthBands)
+        if not ok then
+            for _,slot in ipairs(healthSlots) do slot.holder:Hide() end
+            slots[1].holder:SetAlpha(1)
+            lastReason="Health display unavailable"
         end
     end
     if survival then
@@ -1028,7 +1096,9 @@ local function recordCast(id)
                     if other~=family and spells[other] then effects[other]=nil;playerAuraCache[spells[other].id]=nil end
                 end
             elseif family=="judgement" and (lastSeal=="justice" or lastSeal=="crusader") and effects[lastSeal] and now-effects[lastSeal]<30 then
-                judgedUtility=lastSeal
+                judgedUtility={family=lastSeal,cast=now,expires=now+(lastSeal=="justice" and 10 or 40)}
+                local guid=read(UnitGUID,"target")
+                if guid then judgedTargets[guid]=judgedUtility end
             end
             local targetEffect=family=="rend" or family=="demo" or family=="roar" or family=="faerie" or family=="lacerate"
             local key=effectKey(family,targetEffect and "target" or "player")
@@ -1048,7 +1118,7 @@ driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID,...)
     if not settings then init() end
     if bindingEvents[event] then spellKeys=nil end
     if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then catalog.ClearTarget();judgedUtility=nil;fleeingUntil=nil end
-    if event=="PLAYER_REGEN_ENABLED" then judgedUtility=nil;fleeingUntil=nil end
+    if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_ENTERING_WORLD" then judgedTargets={};judgedUtility=nil;fleeingUntil=nil end
     if event=="CHAT_MSG_MONSTER_EMOTE" then
         local msg,sender=plain(unit),plain(castArg)
         local guid=plain(select(8,...))
@@ -1076,7 +1146,8 @@ driver:SetScript("OnUpdate",function(_,delta)
     elapsed=elapsed+delta
     if elapsed>=.1 then elapsed=0; update() end
 end)
-SLASH_PROTPILOTOFFENSE1="/ppoff"
+SLASH_PROTPILOTOFFENSE1="/rpilot"
+SLASH_PROTPILOTOFFENSE2="/ppoff"
 SlashCmdList.PROTPILOTOFFENSE=function(message)
     if not settings then init() end
     local command=(message or ""):lower():match("^%s*(.-)%s*$")
@@ -1105,7 +1176,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
     elseif command=="bleed immune" or command=="bleed clear" then
         local id=creatureID()
         if id then ProtPilotOffenseBleedImmune[id]=command=="bleed immune" or nil
-        else say("Creature ID unavailable; use /ppoff bleed off.") end
+        else say("Creature ID unavailable; use /rpilot bleed off.") end
     elseif command=="bleed off" or command=="bleed on" then settings.rend=command=="bleed on"
     elseif command:match("^threshold ") then
         local family,percent=command:match("^threshold (%a+) (%d+)$")
@@ -1115,14 +1186,14 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         if valid and percent and percent>=5 and percent<=95 then
             settings.thresholds[family]=percent/100
             say("Health threshold updated.")
-        else say("Use a defensive family shown by /ppoff status and a percentage from 5 to 95.") end
+        else say("Use a defensive family shown by /rpilot status and a percentage from 5 to 95.") end
     elseif command:match("^bossmap ") then
         local id,kind=command:match("^bossmap (%d+) (%a+)$")
         if id and (kind=="physical" or kind=="magic" or kind=="any" or kind=="clear") then
             settings.bossSpells[tonumber(id)]=kind~="clear" and kind or nil
             say("Boss mapping updated.")
         end
-    elseif key=="dispelcue" or key=="experimental" or key=="potions" or key=="breaks" or key=="selfheal" then
+    elseif key=="dispelcue" or key=="potions" or key=="breaks" or key=="selfheal" then
         if value=="on" or value=="off" then settings[key]=value=="on" end
     elseif key=="visibility" and (value=="always" or value=="combat" or value=="auto") then settings.visibility=value
     elseif command=="exorcism allow" or command=="exorcism clear" then
@@ -1149,14 +1220,39 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         end
         table.sort(rows)
         survival.Report("Learned spellbook from latest out-of-combat scan. Compare with TANK-ABILITIES.md for tank rules.\n"..table.concat(rows,"\n"))
-    elseif command=="report" then
-        survival.Report("Profile="..tostring(profileKey).." | Targets="..enemyCount.." ("..tostring(ProtPilotTargets and ProtPilotTargets.source)..") | Health="..tostring(survival.healthStatus).." | Movement="..tostring(survival.movementStatus).." | Dispel="..tostring(survival.dispelStatus))
+    elseif command=="report" or command:match("^why%s+") then
+        local lines={"Profile "..tostring(profileKey).." | targets "..enemyCount.." | "..ProtPilotTargets.source,
+            "Health "..tostring(survival.healthStatus).." | Movement "..tostring(survival.movementStatus).." | Dispel "..tostring(survival.dispelStatus)}
+        for i,label in ipairs({"Now","Next","Then"}) do
+            local a=lastQueue[i]
+            lines[#lines+1]=label.." = "..(a and (a.spell.name.." | "..a.reason.." | +"..string.format("%.1f",a.delay or 0).."s") or "empty")
+        end
+        local query=command:match("^why%s+(.+)$")
+        if query then
+            local matched=false
+            for family,spell in pairs(spells) do
+                if query==family:lower() or query==tostring(spell.id) or query==(spell.name or ""):lower() then
+                    matched=true
+                    local cd=cooldown(spell)
+                    local range=read(C_Spell.IsSpellInRange,spell.id,"target")
+                    local why="Ready checks passed; profile conditions or a higher priority decide placement"
+                    if family=="exorcism" and not catalog.ValidHolyTarget(879) then why="Target eligibility unconfirmed or ineligible"
+                    elseif read(C_Spell.IsSpellUsable,spell.id)~=true then why="Unusable or usability unreadable"
+                    elseif cd==nil then why="Cooldown unreadable"
+                    elseif cd>0 then why="Cooldown "..string.format("%.1f",cd).."s"
+                    elseif range==false then why="Current target out of range or invalid" end
+                    lines[#lines+1]=spell.name.." | "..why.." | cost "..tostring(cost(spell)).." | power "..tostring(read(UnitPower,"player"))
+                end
+            end
+            if not matched then lines[#lines+1]="No selected rank matched; use the spellbook name, family, or selected rank ID." end
+        end
+        survival.Report(table.concat(lines,"\n"))
     elseif command=="status" or command=="healthtest status" then
         say("Profile="..tostring(profileKey).." | Targets="..enemyCount.." | "..tostring(ProtPilotTargets and ProtPilotTargets.source))
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
-        say("Experimental="..tostring(settings.experimental).." potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.7.1 | "..(class or "unknown").." | "..lastReason)
+        say("Potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
+        say("0.8.0 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do
@@ -1164,11 +1260,11 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
             say(family.." ("..spell.id..") usable="..tostring(ok).." cooldown="..tostring(cooldown(spell)))
         end
     else
-        say("/ppoff auto | single | aoe | move | lock | status | report; profile NAME; cooldowns on|off")
-        say("/ppoff seal righteousness|fury|auto|manual; aura auto|devotion|retribution|manual")
-        say("/ppoff blessing auto|kings|might|manual; health on|off; demo on|off; boss on|off")
-        say("/ppoff threshold DEFENSIVE|potion|selfheal PERCENT; experimental|potions|breaks|selfheal on|off; visibility auto|always|combat")
-        say("/ppoff bossmap SPELLID physical|magic|any|clear; reserve NUMBER; mana PERCENT; bleed immune|clear|on|off")
+        say("/rpilot auto | single | aoe | move | lock | status | report; profile NAME; cooldowns on|off")
+        say("/rpilot seal righteousness|fury|auto|manual; aura auto|devotion|retribution|manual")
+        say("/rpilot blessing auto|kings|might|manual; health on|off; demo on|off; boss on|off")
+        say("/rpilot threshold DEFENSIVE|potion|selfheal PERCENT; potions|breaks|selfheal on|off; visibility auto|always|combat")
+        say("/rpilot bossmap SPELLID physical|magic|any|clear; reserve NUMBER; mana PERCENT; bleed immune|clear|on|off")
     end
     preview=preview and command=="healthtest preview"
     update()
