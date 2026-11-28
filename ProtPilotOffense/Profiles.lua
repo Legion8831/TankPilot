@@ -13,8 +13,23 @@ local function read(fn,...)
     local ok,a,b,c,d,e=pcall(fn,...)
     if ok then return plain(a),plain(b),plain(c),plain(d),plain(e) end
 end
+local function logDiag(key,value)
+    if ProtPilotSurvival and type(ProtPilotSurvival.Log)=='function' then pcall(ProtPilotSurvival.Log,key,value) end
+end
 local holyCreature, confirmedExorcism, pendingCast
+local macroExpires, sentExpires, sentGUID
+local rejectInferenceUntil
+local nextTooltipCheck=0
+local tooltipStatus
+local targetSource
+local function unlimitedExorcism()
+    local learned=read(IsPlayerSpell,415076)
+    if learned==nil then learned=read(C_SpellBook and C_SpellBook.IsSpellInSpellBook,415076) end
+    return learned
+end
 local function npcID()
+    local id=read(UnitCreatureID,'target')
+    if type(id)=='number' and id>0 then return tostring(id) end
     local guid=read(UnitGUID,'target')
     return type(guid)=='string' and guid:match('^Creature%-%d+%-%d+%-%d+%-%d+%-(%d+)%-') or nil
 end
@@ -29,21 +44,127 @@ function P.MarkExorcism(allow)
     if not allow then return 'Cleared Exorcism confirmation.' end
     return id and 'Exorcism confirmed for this NPC type.' or 'Exorcism confirmed until you change targets.'
 end
+-- Paired with /cast [@target,harm,nodead] Exorcism on the same button.
+function P.ArmTargetExorcism()
+    macroExpires=nil
+    rejectInferenceUntil=nil
+    if read(UnitCanAttack,'player','target')==true then
+        macroExpires=GetTime()+1
+        logDiag('Exorcism learning','target macro armed')
+    end
+end
+function P.CancelTargetExorcism()
+    macroExpires,pendingCast,sentExpires,sentGUID=nil,nil,nil,nil
+end
 function P.ExorcismSent(destination,castGUID)
     pendingCast=nil
     local name=read(UnitName,'target')
-    if type(name)=='string' and name~='' and plain(destination)==name and type(plain(castGUID))=='string' then
+    destination=plain(destination)
+    rejectInferenceUntil=nil
+    if name and destination and destination~='' and destination~=name then
+        macroExpires=nil
+        rejectInferenceUntil=GetTime()+8
+    end
+    sentExpires,sentGUID=nil,nil
+    if macroExpires and GetTime()<=macroExpires then
+        sentExpires,sentGUID=GetTime()+8,plain(castGUID)
+    end
+    macroExpires=nil
+    if type(name)=='string' and name~='' and destination==name and type(plain(castGUID))=='string' then
         pendingCast=castGUID
     end
 end
 function P.ExorcismSucceeded(castGUID)
-    if pendingCast and plain(castGUID)==pendingCast and read(IsPlayerSpell,415076)==false then
-        P.MarkExorcism(true)
+    local pairedMacro=macroExpires and GetTime()<=macroExpires
+    local guid=plain(castGUID)
+    if sentExpires and GetTime()<=sentExpires and (not sentGUID or not guid or sentGUID==guid) then pairedMacro=true end
+    local matchedCast=pendingCast and plain(castGUID)==pendingCast
+    P.CancelTargetExorcism()
+    if pairedMacro or matchedCast then
+        local unrestricted=unlimitedExorcism()
+        if unrestricted==false then
+            logDiag('Exorcism learning',P.MarkExorcism(true))
+        elseif unrestricted==nil then
+            confirmedExorcism=true
+            logDiag('Exorcism learning','confirmed for current target')
+        else
+            logDiag('Exorcism learning','target restriction unknown or unrestricted')
+        end
+    elseif (not rejectInferenceUntil or GetTime()>rejectInferenceUntil)
+        and read(UnitCanAttack,'player','target')==true and read(UnitIsDeadOrGhost,'target')~=true then
+        -- Destination can be hidden even for a successful @target cast. Keep
+        -- this inference on the selection only, never in the saved NPC table.
+        confirmedExorcism=true
+        logDiag('Exorcism learning','successful cast counted for selected target')
+    else
+        logDiag('Exorcism learning','no stable attackable target for successful cast')
     end
-    pendingCast=nil
 end
 function P.ClearTarget()
-    holyCreature,confirmedExorcism,pendingCast=nil,nil,nil
+    if confirmedExorcism then logDiag('Exorcism learning','current target confirmation cleared on target change or world entry') end
+    rejectInferenceUntil=GetTime()+1
+    if sentExpires or pendingCast or macroExpires then rejectInferenceUntil=GetTime()+8 end
+    P.CancelTargetExorcism()
+    holyCreature,confirmedExorcism=nil,nil
+    nextTooltipCheck,targetSource,tooltipStatus=0,nil,nil
+end
+-- Only read ordinary tooltip values. Creature names and flavor text can
+-- contain "Undead" too, so only accept a type line or a level/type label.
+local function tooltipHolyTarget()
+    if not C_TooltipInfo or read(UnitIsPlayer,'target')==true then return false end
+    local data=read(C_TooltipInfo.GetUnit,'target')
+    local lines=data and plain(data.lines)
+    if type(lines)~='table' then return false end
+    tooltipStatus='no matching readable type line'
+    local previousWasLevel=false
+    local types=Enum and Enum.TooltipDataLineType or {}
+    for index,line in ipairs(lines) do
+        line=plain(line)
+        local text=line and plain(line.leftText)
+        local levelLine=false
+        if index>1 and type(text)=='string' then
+            text=text:gsub('|c%x%x%x%x%x%x%x%x',''):gsub('|r',''):match('^%s*(.-)%s*$')
+            local kind=plain(line.type)
+            levelLine=(kind~=nil and kind==types.UnitLevel) or text:match('^Level%s+[%d?]+%f[%D]') or text:match('^Level%s+[%d?]+$')
+            for _,id in ipairs({3,6}) do
+                local info=read(C_CreatureInfo and C_CreatureInfo.GetCreatureTypeInfo,id)
+                local label=info and plain(info.name) or (id==3 and 'Demon' or 'Undead')
+                if type(label)=='string' and label~='' then
+                    if text==label and (previousWasLevel or (kind~=nil and kind==types.UnitType)) then return true end
+                    if levelLine and text:sub(-#label-1)==' '..label then return true end
+                end
+            end
+        end
+        previousWasLevel=levelLine
+    end
+    return false
+end
+-- Snapshot only on request. Never format a secret value.
+function P.ExorcismEvidenceReport()
+    local function describe(v)
+        if issecretvalue and issecretvalue(v) then return '<restricted>' end
+        if type(v)=='nil' then return '<absent>' end
+        if type(v)=='string' then return v:sub(1,100):gsub('|','||') end
+        if type(v)=='number' then return tostring(v) end
+        return '<'..type(v)..'>'
+    end
+    local rows={'Target snapshot | NPC ID '..(npcID() or '<unavailable>')..' | name '..(read(UnitName,'target') or '<unavailable>')}
+    local function collect()
+        local data=C_TooltipInfo.GetUnit('target')
+        if not plain(data) or not plain(data.lines) then
+            rows[#rows+1]='Tooltip lines unavailable'
+            return
+        end
+        local count=#data.lines
+        rows[#rows+1]='Tooltip lines '..count
+        for i=1,math.min(count,12) do
+            local line=plain(data.lines[i])
+            rows[#rows+1]=line and ('Row '..i..' | type '..describe(line.type)..' | left '..describe(line.leftText)..' | right '..describe(line.rightText)) or ('Row '..i..' unavailable')
+        end
+    end
+    local ok=pcall(collect)
+    if not ok then rows[#rows+1]='Tooltip read failed' end
+    return table.concat(rows,'\n')
 end
 function P.ObserveHolyTarget()
     local name,typeID=read(UnitCreatureType,'target')
@@ -58,10 +179,20 @@ function P.ObserveHolyTarget()
             end
         end
     end
+    if type(typeID)=='number' and typeID>0 or type(name)=='string' and name~='' then
+        targetSource='creature type'
+    elseif holyCreature==nil and GetTime()>=nextTooltipCheck then
+        nextTooltipCheck=GetTime()+1
+        tooltipStatus='unit tooltip unavailable'
+        if read(tooltipHolyTarget) then holyCreature,targetSource=true,'unit tooltip' end
+    end
     return holyCreature
 end
+function P.HolyTargetSource()
+    return targetSource or (confirmedExorcism and 'confirmed target') or (ProtPilotExorcismNPCs and ProtPilotExorcismNPCs[npcID()] and 'confirmed NPC') or tooltipStatus or 'unknown'
+end
 function P.ValidHolyTarget(baseID)
-    if baseID==879 and read(IsPlayerSpell,415076)==true then return true end
+    if baseID==879 and unlimitedExorcism()==true then return true end
     local observed=P.ObserveHolyTarget()
     if observed~=nil then return observed end
     if baseID~=879 then return false end
@@ -181,7 +312,7 @@ local finishers={[2098]=true,[1943]=true,[5171]=true,[1316709]=true,[1079]=true,
 local bleeds={[772]=true,[703]=true,[1943]=true,[1079]=true,[1822]=true,[1328617]=true}
 local resourceID={mana=0,rage=1,energy=3,combo_points=4}
 local function compare(v,op,n)
-    if type(v)~='number' then return nil end
+    if type(v)~='number' or type(n)~='number' then return nil end
     if op=='<' then return v<n elseif op=='<=' then return v<=n elseif op=='>' then return v>n
     elseif op=='>=' then return v>=n elseif op=='!=' then return v~=n else return v==n end
 end

@@ -1,21 +1,32 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 local S=ProtPilotSurvival
 local lines,last={},{}
-function S.Log(key,value)
-    local text=tostring(value)
-    if last[key]==text then return end
-    last[key]=text
-    if #lines>=200 then table.remove(lines,1) end
-    lines[#lines+1]=string.format('%.2f %s | %s=%s',GetTime(),InCombatLockdown() and 'COMBAT' or 'IDLE',key,text)
-end
 local function plain(v)
     if issecretvalue and issecretvalue(v) then return nil end
     if type(v)=='table' and issecrettable and issecrettable(v) then return nil end
     return v
 end
+local function safeTime()
+    if type(GetTime)~='function' then return 0 end
+    local ok,t=pcall(GetTime)
+    t=ok and plain(t) or nil
+    return type(t)=='number' and t or 0
+end
+local function inCombat()
+    if type(InCombatLockdown)~='function' then return false end
+    local ok,v=pcall(InCombatLockdown)
+    return ok and plain(v)==true
+end
+function S.Log(key,value)
+    local text=tostring(value)
+    if last[key]==text then return end
+    last[key]=text
+    if #lines>=200 then table.remove(lines,1) end
+    lines[#lines+1]=string.format('%.2f %s | %s=%s',safeTime(),inCombat() and 'COMBAT' or 'IDLE',key,text)
+end
 local lastContext
 function S.ProbeAuraAccess()
-    local context=InCombatLockdown() and 'combat' or 'idle'
+    local context=inCombat() and 'combat' or 'idle'
     if lastContext==context then return end
     lastContext=context
     local fn=C_UnitAuras and C_UnitAuras.GetAuraDataByIndex
@@ -45,6 +56,6 @@ function S.Report(summary)
         edit:SetFontObject(ChatFontNormal);edit:SetWidth(660);edit:SetMaxLetters(0)
         edit:SetScript('OnEscapePressed',function() reportFrame:Hide() end);scroll:SetScrollChild(edit)
     end
-    edit:SetText('Rotation Pilot 0.8.1\n'..summary..'\nLast 200 changes; timestamps are session seconds.\n'..table.concat(lines,'\n'))
+    edit:SetText('Rotation Pilot 0.8.9\n'..summary..'\nLast 200 changes; timestamps are session seconds.\n'..table.concat(lines,'\n'))
     reportFrame:Show();edit:SetFocus();edit:HighlightText()
 end

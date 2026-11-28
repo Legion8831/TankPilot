@@ -658,3 +658,53 @@ assert(textures[1].texture==20287,"switching away invalidates previous seal")
 cast(20287)
 assert(textures[1].texture==20271,"highest rank replacement recognized")
 clock=clock+31;tick();assert(textures[1].texture==20287,"expired seal returns to queue")
+
+-- 0.8.9 regression tests: sorted health bands, gate bounds, manual seal reset, and why diagnostics.
+-- 1. Warlock Destruction Agony gate has numeric n=3 and compare() rejects nil bounds safely.
+local destr = ProtPilotCatalog.trees.WARLOCK_F.destruction.st
+local foundAgonyGate = false
+for _, item in ipairs(destr) do
+    for _, g in ipairs(item.gates or {}) do
+        if g.t == "debuff" and g.id == 980 and g.op == "<=" then
+            assert(g.n == 3, "Warlock Destruction Agony gate must have n=3")
+            foundAgonyGate = true
+        end
+    end
+end
+assert(foundAgonyGate, "expected Warlock Destruction Agony gate")
+assert(ProtPilotProfiles.Gate({t="targets", op="<=", n=nil}, {targets=1}, {time=0}) == nil, "nil bound must evaluate to unknown")
+
+-- 2. Sorted health bands: a defensive with a lower custom threshold than Lay on Hands is not skipped.
+ProtPilotCharacterDB = {profile = "protection"}
+ProtPilotSettingsAPI.set("health", true)
+IsInGroup = function() return false end
+UnitHealth = function() return marker end
+cmd("threshold protection 15")
+fresh("PALADIN", {20154, 20271, 633, 498})
+hp = 0.10; tick()
+assert(frames[5].shown and frames[5].alpha == 1 and textures[4].texture == 498, "lowest threshold (15%) renders in band 1")
+hp = 0.18; tick()
+assert(frames[5].alpha == 0 and frames[2].alpha == 0, "second band (15-20%) masks offense when band 1 is off")
+hp = 0.95; tick()
+assert(frames[2].alpha == 1, "healthy restores offense")
+cmd("threshold protection 35")
+UnitHealth = function() return 100 end
+ProtPilotSettingsAPI.set("health", false)
+
+-- 3. Protection Paladin manual seal mode does not recommend Judgement when no seal is active.
+auraMap = {}
+fresh("PALADIN", {20154, 20271, 679})
+cmd("seal manual"); tick()
+assert(textures[1].texture == 679, "manual seal with no active seal falls through to Holy Strike")
+cmd("seal auto")
+
+-- 4. /rpilot why reports mana reserve and bleed-immune reasons cleanly.
+power = 25
+UnitPowerMax = function() return 100 end
+costs[26573] = 20
+fresh("PALADIN", {26573, 679})
+cmd("why consecration")
+cmd("bleed off")
+fresh("WARRIOR", {772, 7386})
+cmd("why rend")
+cmd("bleed on")

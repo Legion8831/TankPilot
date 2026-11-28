@@ -12,11 +12,12 @@ function S.CreateDispelCue(parent,spell,cleanse)
     local candidate
     local ok,err=pcall(function()
         local style=Enum and Enum.CustomAuraButtonDispelTypeTextureStyle
-        if not (style and style.PreserveAsset and C_CurveUtil and C_CurveUtil.CreateColorCurve) then
+        local curveType=Enum and Enum.LuaCurveType and Enum.LuaCurveType.Step
+        if not (style and style.PreserveAsset and curveType and C_CurveUtil and C_CurveUtil.CreateColorCurve) then
             error('AuraContainer display API unavailable')
         end
         local curve=C_CurveUtil.CreateColorCurve()
-        curve:SetType(Enum.LuaCurveType.Step)
+        curve:SetType(curveType)
         for i=0,10 do
             local visible=i==3 or i==4 or (cleanse and i==1)
             curve:AddPoint(i,CreateColor(1,1,1,visible and 1 or 0))

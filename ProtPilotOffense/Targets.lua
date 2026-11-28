@@ -6,7 +6,7 @@ local T=ProtPilotTargets
 local function read(fn,...)
     if type(fn)~='function' then return nil end
     local ok,v=pcall(fn,...)
-    if not ok or issecretvalue and issecretvalue(v) then return nil end
+    if not ok or (issecretvalue and issecretvalue(v)) or (type(v)=='table' and issecrettable and issecrettable(v)) then return nil end
     return v
 end
 function T.Update(mode)

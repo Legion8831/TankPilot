@@ -1,6 +1,6 @@
 # Rotation Pilot
 
-Tank and DPS rotation helper for WoW Forever. Version 0.8.1 shows the next three actions and can recommend defensives, dispels, and consumables.
+Tank and DPS rotation helper for WoW Forever. Version 0.8.9 shows the next three actions and can recommend defensives, dispels, and consumables.
 
 ## Installation
 

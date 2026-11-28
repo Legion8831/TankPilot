@@ -1,4 +1,11 @@
-# Rotation Pilot 0.8.1
+# Rotation Pilot 0.8.9
+
+- **Health-band curve fix:** Sort health-triggered actions by ascending threshold before building disjoint client color curves so lower-threshold defensives/potions are never skipped or overlapped, and guard `C_CurveUtil` / `Enum.LuaCurveType` safely.
+- **Protection Paladin fixes:** Reset manual seal detection cleanly before scanning active seals, and route Holy Wrath (`2812`) through `ValidHolyTarget` while keeping Exorcism (`879`) confirmation strictly spell-specific.
+- **All-class gate safety:** Fix the incomplete Warlock Destruction Agony refresh gate (`n=3` in `PriorityUpdates.lua`) and guard numeric comparisons in `Profiles.lua:compare()` against missing bounds.
+- **Performance & diagnostics:** Throttle high-frequency `UNIT_AURA` and nameplate event bursts to 0.05s, expand `/rpilot why <spell>` to report mana/rage reserves and bleed immunity, and harden cross-file/secret-value guards across `Diagnostics.lua`, `DispelCue.lua`, `Targets.lua`, `Profiles.lua`, and `Offense.lua`.
+
+# Rotation Pilot 0.8.8
 
 Track successful seal replacements across ranks and report incoming DBM timer starts with their labels, durations and spell IDs when readable.
 
@@ -479,3 +486,15 @@ and the cast identifier stays readable. You can also target that mob and use
 A readable NPC ID lets the confirmation apply to later mobs with that same ID.
 Otherwise it expires when you change targets. Check the snapshot with
 `/ppoff exorcism`.
+
+### Learning Exorcism targets
+
+Use this macro in place of your usual Exorcism button.
+
+```
+#showtooltip Exorcism
+/ppoff exorcism learn
+/cast [@target,harm,nodead] Exorcism
+```
+
+The addon waits for a successful Exorcism before confirming the selected target. A target change clears the current confirmation. When the NPC ID and the restricted-target spell rules are readable, the confirmation also applies to future encounters with that NPC ID.

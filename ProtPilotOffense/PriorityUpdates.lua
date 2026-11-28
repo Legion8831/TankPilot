@@ -46,3 +46,14 @@ for _,key in ipairs({'st','cleave','aoe'}) do
 end
 -- A readable long-lived boss target is required for Doom; no invented time-to-die.
 -- Runtime suppresses Doom on ordinary mobs and keeps Agony available.
+-- Fix incomplete Warlock Destruction Agony refresh gate (missing numeric n threshold).
+for _,key in ipairs({'st','cleave','aoe'}) do
+    local list=T.WARLOCK_F and T.WARLOCK_F.destruction and T.WARLOCK_F.destruction[key]
+    if list then
+        for _,item in ipairs(list) do
+            for _,g in ipairs(item.gates or {}) do
+                if g.t=='debuff' and g.id==980 and g.op=='<=' and g.n==nil then g.n=3 end
+            end
+        end
+    end
+end

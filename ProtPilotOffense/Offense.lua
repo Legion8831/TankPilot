@@ -1,6 +1,6 @@
--- Rotation Pilot 0.8.1. All recommendations require a manual player action.
+-- Rotation Pilot 0.8.9. All recommendations require a manual player action.
 local spells, class, profile = {}, nil, nil
-local needsScan, elapsed = true, 0
+local needsScan, elapsed, dirty = true, 0, false
 local casts, effects, observedCooldowns = {}, {}, {}
 local playerAuraCache = {}
 local survival=ProtPilotSurvival
@@ -68,6 +68,13 @@ local function number(v)
     if type(v)=="number" and v==v then return v end
 end
 local function say(msg) print("Rotation Pilot: "..msg) end
+local function logDiag(key,value)
+    if survival and type(survival.Log)=='function' then pcall(survival.Log,key,value) end
+end
+local function baseSpellID(id)
+    if catalog and type(catalog.Base)=='function' then return catalog.Base(id) end
+    return id
+end
 local function init()
     if type(ProtPilotOffenseDB)~="table" then ProtPilotOffenseDB={} end
     settings=ProtPilotOffenseDB
@@ -509,8 +516,9 @@ local function rotation(model)
         local seal=selectedSeal()
         local sealActive=seal and not due(seal,"player",30,model)
         if settings.seal=="manual" then
+            seal,sealActive=nil,false
             for _,id in ipairs({1311649,20154,20375,21082,20164,20165,20166}) do
-                local learned=catalog.Resolve({byID=byID},id)
+                local learned=catalog and catalog.Resolve and catalog.Resolve({byID=byID},id) or byID[id]
                 if learned and active(learned.family) then
                     seal=id==1311649 and "fury" or learned.family
                     sealActive=true
@@ -541,6 +549,10 @@ local function rotation(model)
         end
         result=choose("holyShield","Block mitigation",true)
         if result then return result end
+        if not settings.aoe and catalog.ValidHolyTarget(879) then
+            result=choose("exorcism","Exorcism damage and threat")
+            if result then return result end
+        end
         if manaAllows and not settings.aoe then
             result=choose("consecration","Start ground damage while mana allows",true)
             if result then return result end
@@ -558,13 +570,17 @@ local function rotation(model)
         local offTank=read(UnitIsUnit,"targettarget","player")==false and (lostThreat==0 or lostThreat==1)
         if offTank and survival.Stationary()==true then
             result=choose("hammerWrath","Execute while off-tanking")
-            local kind=read(UnitCreatureType,"target")
-            if not result and settings.aoe and (kind=="Demon" or kind=="Undead") then
+            local validWrath=catalog and catalog.ValidHolyTarget and catalog.ValidHolyTarget(2812)
+            if validWrath==nil then
+                local kind=read(UnitCreatureType,"target")
+                validWrath=(kind=="Demon" or kind=="Undead")
+            end
+            if not result and settings.aoe and validWrath then
                 result=choose("holyWrath","Off-tank area damage")
             end
             if result then return result end
         end
-        if catalog.ValidHolyTarget(879) then
+        if settings.aoe and catalog.ValidHolyTarget(879) then
             result=choose("exorcism","Exorcism damage and threat")
             if result then return result end
         end
@@ -639,7 +655,7 @@ local function advance(model, action)
         not (action.interrupt and (action.baseID==1766 or action.baseID==2139 or action.baseID==6552)) then
         local info=read(C_Spell and C_Spell.GetSpellInfo,spell.id)
         local castTime=info and number(info.castTime)
-        model.time=model.time+math.max(1.5,(castTime or 0)/1000,channels[catalog.Base(spell.id)] or 0)
+        model.time=model.time+math.max(1.5,(castTime or 0)/1000,channels[baseSpellID(spell.id)] or 0)
     end
 end
 local function buildQueue(combat, firstAction, pullTarget)
@@ -684,6 +700,8 @@ end
 -- DBM countdown adapter. Production triggers require an explicit spell mapping.
 local timers, registered = {}, {}
 local timerStarts,lastTimer=0,"none"
+local lastEnemyCast="none"
+local castingSpellID
 local function dbmCallback(event,id,...)
     id=plain(id)
     if type(id)~="string" and type(id)~="number" then return end
@@ -692,7 +710,7 @@ local function dbmCallback(event,id,...)
         label,duration,kind,spellID=plain(label),number(duration),plain(kind),plain(spellID)
         timerStarts=timerStarts+1
         lastTimer=string.format("%s | spell %s | duration %s",type(label)=="string" and label or "unknown",tostring(spellID or "unknown"),tostring(duration or "unknown"))
-        survival.Log("DBM timer",lastTimer)
+        logDiag("DBM timer",lastTimer)
         local demo=settings.demo and type(label)=="string" and label:match("^%s*Tank Buster%s*$")
         local mapped=(type(spellID)=="number" or type(spellID)=="string") and settings.bossSpells[tonumber(spellID)]
         if duration and duration>0 and (demo or mapped) then
@@ -763,6 +781,25 @@ local function planned(timer)
     end
 end
 
+local function enemyCastDetails()
+    if type(UnitCastingInfo)~="function" then return end
+    local ok,name,_,_,_,finish,_,_,_,id=pcall(UnitCastingInfo,"target")
+    if ok then return plain(name),number(finish),number(id) end
+end
+local function enemyCastPlan()
+    if read(UnitCanAttack,"player","target")~=true or read(UnitIsUnit,"targettarget","player")~=true then return end
+    local name,finish,id=enemyCastDetails()
+    if not finish then return end
+    local left=finish/1000-GetTime()
+    if left<=0 or left>2 then return end
+    id=id or castingSpellID
+    if not name and id then name=read(C_Spell and C_Spell.GetSpellName,id) end
+    local kind=settings.bossSpells[id] or (name=="Mind Blast" and "magic")
+    if kind then
+        local action=planned({kind=kind})
+        if action then action.reason="Incoming target cast: "..(name or tostring(id));return action end
+    end
+end
 local function incoming(combat)
     if not settings.boss then return end
     local now,best,chosen,bestID=GetTime()
@@ -779,7 +816,7 @@ local function incoming(combat)
             end
         end
     end
-    return chosen
+    return chosen or (combat and enemyCastPlan() or nil)
 end
 local soloHeals={PALADIN={"flashLight","holyLight"},SHAMAN={"lesserWave","healingWave"},
     PRIEST={"flashHeal","lesserHeal"},DRUID={"healingTouch"}}
@@ -949,12 +986,14 @@ moveHint:SetPoint("TOPLEFT",frame,"BOTTOMLEFT",0,-44)
 moveHint:SetText("Drag to move. Lock in /rpilot options.")
 local curveCache={}
 local function curves(threshold)
+    local linear=Enum and Enum.LuaCurveType and Enum.LuaCurveType.Linear
+    if not (C_CurveUtil and type(C_CurveUtil.CreateColorCurve)=='function' and linear) then error('C_CurveUtil unavailable') end
     if curveCache[threshold] then return curveCache[threshold][1],curveCache[threshold][2] end
     local function make(low,normal)
         local curve=C_CurveUtil.CreateColorCurve()
-        curve:SetType(Enum.LuaCurveType.Linear)
+        curve:SetType(linear)
         curve:AddPoint(0,CreateColor(1,1,1,low))
-        curve:AddPoint(threshold-.001,CreateColor(1,1,1,low))
+        curve:AddPoint(math.max(0,threshold-.001),CreateColor(1,1,1,low))
         curve:AddPoint(threshold,CreateColor(1,1,1,normal))
         curve:AddPoint(1,CreateColor(1,1,1,normal))
         return curve
@@ -964,39 +1003,55 @@ local function curves(threshold)
     return low,normal
 end
 -- Render disjoint health bands directly through client-owned color curves.
+-- Sort by ascending threshold so lower-threshold actions are never skipped or overlapped.
 local bandCache={}
 local function paintHealthBands()
-    local used,lower=0,0
-    local function add(action,upper)
-        if not action or upper<=lower then return end
-        used=used+1
-        local slot=healthSlots[used] or makeHealthSlot()
-        healthSlots[used]=slot
-        local key=lower.."/"..upper
-        local curve=bandCache[key]
-        if not curve then
-            curve=C_CurveUtil.CreateColorCurve()
-            curve:SetType(Enum.LuaCurveType.Linear)
-            if lower>0 then
-                curve:AddPoint(0,CreateColor(1,1,1,0))
-                curve:AddPoint(lower-.001,CreateColor(1,1,1,0))
-            end
-            curve:AddPoint(lower,CreateColor(1,1,1,1))
-            curve:AddPoint(upper-.001,CreateColor(1,1,1,1))
-            curve:AddPoint(upper,CreateColor(1,1,1,0))
-            curve:AddPoint(1,CreateColor(1,1,1,0))
-            bandCache[key]=curve
-        end
-        local color=UnitHealthPercent("player",true,curve)
-        slot.key:SetText(bindingFor(action.spell))
-        slot.icon:SetTexture(action.spell.icon)
-        slot.label:SetText(action.spell.name..((action.family=="layHands" or action.selfHeal) and " (self)" or ""))
-        slot.label:SetShown(settings.showNames)
-        slot.holder:SetAlpha(select(4,color:GetRGBA()))
-        slot.holder:Show()
-        lower=upper
+    local linear=Enum and Enum.LuaCurveType and Enum.LuaCurveType.Linear
+    if type(UnitHealthPercent)~='function' or not (C_CurveUtil and type(C_CurveUtil.CreateColorCurve)=='function' and linear) then
+        error('Health curve API unavailable')
     end
-    visitHealthActions(add)
+    local items={}
+    visitHealthActions(function(action,upper)
+        if action and type(upper)=='number' and upper>0 then
+            items[#items+1]={action=action,upper=upper,order=#items+1}
+        end
+    end)
+    table.sort(items,function(a,b)
+        if a.upper~=b.upper then return a.upper<b.upper end
+        return a.order<b.order
+    end)
+    local used,lower=0,0
+    for _,item in ipairs(items) do
+        local action,upper=item.action,item.upper
+        if upper>lower then
+            used=used+1
+            local slot=healthSlots[used] or makeHealthSlot()
+            healthSlots[used]=slot
+            local key=lower.."/"..upper
+            local curve=bandCache[key]
+            if not curve then
+                curve=C_CurveUtil.CreateColorCurve()
+                curve:SetType(linear)
+                if lower>0 then
+                    curve:AddPoint(0,CreateColor(1,1,1,0))
+                    curve:AddPoint(math.max(0,lower-.001),CreateColor(1,1,1,0))
+                end
+                curve:AddPoint(lower,CreateColor(1,1,1,1))
+                curve:AddPoint(math.max(lower,upper-.001),CreateColor(1,1,1,1))
+                curve:AddPoint(upper,CreateColor(1,1,1,0))
+                curve:AddPoint(1,CreateColor(1,1,1,0))
+                bandCache[key]=curve
+            end
+            local color=UnitHealthPercent("player",true,curve)
+            slot.key:SetText(bindingFor(action.spell))
+            slot.icon:SetTexture(action.spell.icon)
+            slot.label:SetText(action.spell.name..((action.family=="layHands" or action.selfHeal) and " (self)" or ""))
+            slot.label:SetShown(settings.showNames)
+            slot.holder:SetAlpha(select(4,color:GetRGBA()))
+            slot.holder:Show()
+            lower=upper
+        end
+    end
     if used>0 then
         local _,normal=curves(lower)
         local color=UnitHealthPercent("player",true,normal)
@@ -1012,7 +1067,7 @@ local function update()
     if not profile then frame:Hide(); return end
     enemyCount=ProtPilotTargets and ProtPilotTargets.Update(settings.targetMode) or (settings.aoe and 4 or 1)
     if ProtPilotTargets then settings.aoe=enemyCount>=2 end
-    if survival then survival.Log('targets',tostring(enemyCount)..' | '..(ProtPilotTargets and ProtPilotTargets.source or 'manual')) end
+    if survival then logDiag('targets',tostring(enemyCount)..' | '..(ProtPilotTargets and ProtPilotTargets.source or 'manual')) end
     unlocked=not settings.locked
     frame:EnableMouse(unlocked)
     local size=tonumber(settings.scale) or 1
@@ -1083,18 +1138,19 @@ local function update()
             emergencyLabel:SetText(action.spell.name..(action.family=="layHands" and " (self)" or ""))
             emergency:SetAlpha(1); emergency:Show(); slots[1].holder:SetAlpha(0)
         end
-    elseif combat and not urgent and settings.health and survival.Below(.5)==nil then
-        local ok=pcall(paintHealthBands)
+    elseif combat and not urgent and settings.health and survival and type(survival.Below)=='function' and survival.Below(.5)==nil then
+        local ok,err=pcall(paintHealthBands)
         if not ok then
             for _,slot in ipairs(healthSlots) do slot.holder:Hide() end
             slots[1].holder:SetAlpha(1)
             lastReason="Health display unavailable"
+            logDiag('health band error',plain(err) or 'curve error')
         end
     end
     if survival then
-        survival.Log('health source',survival.healthStatus or 'not evaluated')
-        survival.Log('movement source',survival.movementStatus or 'unknown')
-        survival.Log('next action',queue[1] and queue[1].spell.name or 'Wait')
+        logDiag('health source',survival.healthStatus or 'not evaluated')
+        logDiag('movement source',survival.movementStatus or 'unknown')
+        logDiag('next action',queue[1] and queue[1].spell.name or 'Wait')
     end
     title:SetText(profile.label..(settings.aoe and " · AoE" or " · Single").." ("..enemyCount..")".." · Now / Forecast")
     reason:SetText(lastReason)
@@ -1133,7 +1189,7 @@ local function recordCast(id)
 end
 local driver=CreateFrame("Frame")
 for _,event in ipairs({"PLAYER_ENTERING_WORLD","SPELLS_CHANGED","PLAYER_REGEN_ENABLED",
-    "TRAIT_CONFIG_UPDATED","PLAYER_TALENT_UPDATE","NAME_PLATE_UNIT_ADDED","NAME_PLATE_UNIT_REMOVED","PLAYER_STARTED_MOVING","PLAYER_STOPPED_MOVING","LOSS_OF_CONTROL_ADDED","LOSS_OF_CONTROL_UPDATE","BAG_UPDATE_DELAYED","CHAT_MSG_MONSTER_EMOTE","PLAYER_TARGET_CHANGED","UNIT_SPELLCAST_SENT","UNIT_SPELLCAST_SUCCEEDED","UPDATE_SHAPESHIFT_FORM","UNIT_AURA"}) do
+    "TRAIT_CONFIG_UPDATED","PLAYER_TALENT_UPDATE","NAME_PLATE_UNIT_ADDED","NAME_PLATE_UNIT_REMOVED","PLAYER_STARTED_MOVING","PLAYER_STOPPED_MOVING","LOSS_OF_CONTROL_ADDED","LOSS_OF_CONTROL_UPDATE","BAG_UPDATE_DELAYED","CHAT_MSG_MONSTER_EMOTE","PLAYER_TARGET_CHANGED","UNIT_SPELLCAST_START","UNIT_SPELLCAST_STOP","UNIT_SPELLCAST_FAILED","UNIT_SPELLCAST_INTERRUPTED","UNIT_SPELLCAST_SENT","UNIT_SPELLCAST_SUCCEEDED","UPDATE_SHAPESHIFT_FORM","UNIT_AURA"}) do
     pcall(driver.RegisterEvent,driver,event)
 end
 for event in pairs(bindingEvents) do pcall(driver.RegisterEvent,driver,event) end
@@ -1142,6 +1198,18 @@ driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID,...)
     if event=="PLAYER_ENTERING_WORLD" or (event=="UNIT_AURA" and plain(unit)=="player" and read(UnitIsDeadOrGhost,"player")==true) then
         lastSeal,sealCastAt,sealConfirmed=nil,nil,nil
         for family in pairs(sealFamilies) do effects[family]=nil end
+    end
+    if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then castingSpellID=nil end
+    if plain(unit)=="target" then
+        if event=="UNIT_SPELLCAST_START" then
+            local name,_,castID=enemyCastDetails()
+            castingSpellID=number(id) or castID
+            if not name and castingSpellID then name=read(C_Spell and C_Spell.GetSpellName,castingSpellID) end
+            lastEnemyCast=(name or "unavailable").." | spell "..tostring(castingSpellID or "unavailable")
+            logDiag("Enemy cast",lastEnemyCast)
+        elseif event=="UNIT_SPELLCAST_STOP" or event=="UNIT_SPELLCAST_INTERRUPTED" or event=="UNIT_SPELLCAST_FAILED" then
+            castingSpellID=nil
+        end
     end
     if bindingEvents[event] then spellKeys=nil end
     if event=="PLAYER_TARGET_CHANGED" or event=="PLAYER_ENTERING_WORLD" then catalog.ClearTarget();judgedUtility=nil;fleeingUntil=nil end
@@ -1158,20 +1226,29 @@ driver:SetScript("OnEvent",function(_,event,unit,castArg,id,sentID,...)
     if event=="UNIT_SPELLCAST_SENT" and plain(unit)=="player" and spells.exorcism and number(sentID)==spells.exorcism.id then
         catalog.ExorcismSent(castArg,id)
     end
+    if (event=="UNIT_SPELLCAST_FAILED" or event=="UNIT_SPELLCAST_INTERRUPTED") and plain(unit)=="player" and spells.exorcism and number(id)==spells.exorcism.id then
+        catalog.CancelTargetExorcism()
+    end
     if event=="UNIT_SPELLCAST_SUCCEEDED" and plain(unit)=="player" then
         id=number(id)
         if spells.exorcism and id==spells.exorcism.id then catalog.ExorcismSucceeded(castArg) end
-        if id then recordCast(id); if survival then survival.Log("cast",id) end end
+        if id then recordCast(id); if survival then logDiag("cast",id) end end
     end
     if event=="PLAYER_ENTERING_WORLD" and type(settings.position)=="table" then
         frame:ClearAllPoints()
         frame:SetPoint(settings.position[1],UIParent,settings.position[2],settings.position[3],settings.position[4])
     end
-    update()
+    if event=="UNIT_AURA" or event=="NAME_PLATE_UNIT_ADDED" or event=="NAME_PLATE_UNIT_REMOVED" then
+        dirty=true
+    else
+        dirty=false; elapsed=0; update()
+    end
 end)
 driver:SetScript("OnUpdate",function(_,delta)
     elapsed=elapsed+delta
-    if elapsed>=.1 then elapsed=0; update() end
+    if (dirty and elapsed>=.05) or elapsed>=.1 then
+        dirty=false; elapsed=0; update()
+    end
 end)
 SLASH_PROTPILOTOFFENSE1="/rpilot"
 SLASH_PROTPILOTOFFENSE2="/ppoff"
@@ -1223,6 +1300,9 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
     elseif key=="dispelcue" or key=="potions" or key=="breaks" or key=="selfheal" then
         if value=="on" or value=="off" then settings[key]=value=="on" end
     elseif key=="visibility" and (value=="always" or value=="combat" or value=="auto") then settings.visibility=value
+    elseif command=="exorcism learn" then
+        catalog.ArmTargetExorcism()
+        return
     elseif command=="exorcism allow" or command=="exorcism clear" then
         say(catalog.MarkExorcism(value=="allow"))
     elseif command=="exorcism" then
@@ -1232,6 +1312,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
             "Target attackable "..field(read(UnitCanAttack,"player","target")),
             "Undead or demon (current target) "..field(catalog.ObserveHolyTarget()),
             "Exorcism target eligible "..field(catalog.ValidHolyTarget(879)),
+            "Target evidence "..catalog.HolyTargetSource(),
             "Visibility "..field(settings.visibility),"Current recommendation "..lastReason}
         if spell then
             lines[#lines+1]="Spell usable "..field(read(C_Spell.IsSpellUsable,spell.id))
@@ -1239,6 +1320,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
             lines[#lines+1]="Cooldown seconds "..field(cooldown(spell))
             lines[#lines+1]="Cost "..field(cost(spell)).." / power "..field(read(UnitPower,"player"))
         end
+        lines[#lines+1]=catalog.ExorcismEvidenceReport()
         survival.Report(table.concat(lines,"\n"))
     elseif command=="audit" then
         local rows={}
@@ -1248,8 +1330,9 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         table.sort(rows)
         survival.Report("Learned spellbook from latest out-of-combat scan. Compare with TANK-ABILITIES.md for tank rules.\n"..table.concat(rows,"\n"))
     elseif command=="report" or command:match("^why%s+") then
-        local lines={"Profile "..tostring(profileKey).." | targets "..enemyCount.." | "..ProtPilotTargets.source,
+        local lines={"Profile "..tostring(profileKey).." | targets "..enemyCount.." | "..tostring(ProtPilotTargets and ProtPilotTargets.source or "manual"),
             "Health "..tostring(survival.healthStatus).." | Movement "..tostring(survival.movementStatus).." | Dispel "..tostring(survival.dispelStatus)}
+        lines[#lines+1]="Latest target cast="..lastEnemyCast
         lines[#lines+1]="DBM loaded="..tostring(DBM~=nil).." | timer start callbacks this session="..timerStarts.." | latest="..lastTimer
         for i,label in ipairs({"Now","Next","Then"}) do
             local a=lastQueue[i]
@@ -1264,11 +1347,17 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
                     local cd=cooldown(spell)
                     local range=read(C_Spell.IsSpellInRange,spell.id,"target")
                     local why="Ready checks passed; profile conditions or a higher priority decide placement"
-                    if family=="exorcism" and not catalog.ValidHolyTarget(879) then why="Target eligibility unconfirmed or ineligible"
-                    elseif read(C_Spell.IsSpellUsable,spell.id)~=true then why="Unusable or usability unreadable"
+                    local spellCost=cost(spell)
+                    local curPower=number(read(UnitPower,"player"))
+                    local maxPower=number(read(UnitPowerMax,"player"))
+                    if (family=="exorcism" or family=="holyWrath") and catalog and catalog.ValidHolyTarget and not catalog.ValidHolyTarget(baseSpellID(spell.id)) then why="Target eligibility unconfirmed or ineligible"
+                    elseif (family=="rend" or family=="lacerate") and not bleedAllowed() then why="Bleeds disabled or target marked bleed-immune"
+                    elseif read(C_Spell and C_Spell.IsSpellUsable,spell.id)~=true then why="Unusable or usability unreadable"
                     elseif cd==nil then why="Cooldown unreadable"
                     elseif cd>0 then why="Cooldown "..string.format("%.1f",cd).."s"
-                    elseif range==false then why="Current target out of range or invalid" end
+                    elseif range==false then why="Current target out of range or invalid"
+                    elseif family=="consecration" and class=="PALADIN" and curPower and maxPower and spellCost and (curPower-spellCost)<(maxPower*(settings.mana or 20)/100) then why="Held by mana reserve ("..tostring(settings.mana).."%)"
+                    elseif (family=="heroic" or family=="cleave" or family=="maul") and curPower and spellCost and curPower<((class=="DRUID" and (settings.aoe and 50 or 35) or settings.reserve)+spellCost) then why="Held by Rage reserve" end
                     lines[#lines+1]=spell.name.." | "..why.." | cost "..tostring(cost(spell)).." | power "..tostring(read(UnitPower,"player"))
                 end
             end
@@ -1280,7 +1369,7 @@ SlashCmdList.PROTPILOTOFFENSE=function(message)
         say("Movement="..tostring(survival.movementStatus).." | Dispel cue="..tostring(survival.dispelStatus))
         say("Survival: health="..tostring(survival and survival.healthStatus).." control="..tostring(survival and survival.controlStatus))
         say("Potions="..tostring(settings.potions).." breaks="..tostring(settings.breaks).." selfheal="..tostring(settings.selfheal))
-        say("0.8.1 | "..(class or "unknown").." | "..lastReason)
+        say("0.8.9 | "..(class or "unknown").." | "..lastReason)
         say("Seal="..settings.seal.." | health="..tostring(settings.health).." | DBM="..tostring(DBM~=nil)
             .." | demo="..tostring(settings.demo))
         for family,spell in pairs(spells) do
